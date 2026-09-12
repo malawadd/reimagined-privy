@@ -27,9 +27,21 @@ export async function requireMembership(
 		.withIndex('by_org_user', (q) => q.eq('organizationId', organizationId).eq('userId', user._id))
 		.unique();
 	if (!membership || membership.status !== 'active') throw new Error('Organization access denied.');
+	const organization = await ctx.db.get(organizationId);
+	if (!organization?.active) throw new Error('Organization is not active.');
 	if (capability && !can(membership.role as OrgRole, capability))
 		throw new Error('Insufficient organization role.');
-	return { identity, user, membership };
+	return { identity, user, membership, organization };
+}
+
+export async function requirePlatformOperator(ctx: Ctx) {
+	const identity = await requireIdentity(ctx);
+	const allowed = (process.env.RATIB_OPERATOR_PRIVY_DIDS ?? '')
+		.split(',')
+		.map((value) => value.trim())
+		.filter(Boolean);
+	if (!allowed.includes(identity.subject)) throw new Error('Platform operator access denied.');
+	return identity;
 }
 
 export function assertOrgScoped<T extends { organizationId: Id<'organizations'> }>(

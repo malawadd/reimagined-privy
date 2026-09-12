@@ -13,6 +13,7 @@ export interface PrivyGateway {
 	}): Promise<unknown>;
 	listWallets(): Promise<unknown[]>;
 	getWallet(walletId: string): Promise<unknown>;
+	getWalletBalance(walletId: string): Promise<unknown>;
 	getPolicy(policyId: string): Promise<unknown>;
 	createPolicy(input: Record<string, unknown> & { idempotency_key: string }): Promise<unknown>;
 	transfer(input: {
@@ -81,6 +82,13 @@ export class LivePrivyGateway implements PrivyGateway {
 
 	getWallet(walletId: string) {
 		return this.client.wallets().get(walletId);
+	}
+
+	getWalletBalance(walletId: string) {
+		return this.client.wallets().balance.get(walletId, {
+			chain: 'base_sepolia',
+			asset: ['eth', 'usdc']
+		});
 	}
 
 	getPolicy(policyId: string) {
@@ -166,54 +174,8 @@ export class LivePrivyGateway implements PrivyGateway {
 }
 
 export function createPrivyGateway(): PrivyGateway {
-	if (process.env.PRIVY_MODE === 'mock') return new MockPrivyGateway();
 	const appId = process.env.PRIVY_APP_ID;
 	const appSecret = process.env.PRIVY_APP_SECRET;
 	if (!appId || !appSecret) throw new Error('Live Privy credentials are not configured.');
 	return new LivePrivyGateway(appId, appSecret);
-}
-
-class MockPrivyGateway implements PrivyGateway {
-	private result(kind: string, status = 'pending') {
-		return { id: `${kind}_mock_${Date.now()}`, status, created_at: Date.now() };
-	}
-	provisionTreasury() {
-		return Promise.resolve({
-			...this.result('wallet', 'active'),
-			address: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F'
-		});
-	}
-	listWallets() {
-		return Promise.resolve([this.result('wallet', 'active')]);
-	}
-	getWallet(walletId: string) {
-		return Promise.resolve({ ...this.result('wallet', 'active'), id: walletId });
-	}
-	getPolicy(policyId: string) {
-		return Promise.resolve({ ...this.result('policy', 'active'), id: policyId });
-	}
-	createPolicy() {
-		return Promise.resolve(this.result('policy', 'active'));
-	}
-	transfer() {
-		return Promise.resolve(this.result('wallet_action'));
-	}
-	createTransferIntent() {
-		return Promise.resolve({ ...this.result('intent'), type: 'TRANSFER' });
-	}
-	requestWalletUpdate() {
-		return Promise.resolve({ ...this.result('intent'), type: 'WALLET_UPDATE' });
-	}
-	requestPolicyUpdate() {
-		return Promise.resolve({ ...this.result('intent'), type: 'POLICY_UPDATE' });
-	}
-	getIntent(intentId: string) {
-		return Promise.resolve({ ...this.result('intent'), id: intentId });
-	}
-	listIntents() {
-		return Promise.resolve([]);
-	}
-	getWalletAction(_walletId: string, actionId: string) {
-		return Promise.resolve({ ...this.result('wallet_action'), id: actionId });
-	}
 }

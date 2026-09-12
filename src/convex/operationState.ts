@@ -8,6 +8,9 @@ import {
 	providerResourceId
 } from '../lib/privy';
 import { appendAudit } from './lib/audit';
+import type { GenericMutationCtx } from 'convex/server';
+import type { DataModel, Doc } from './_generated/dataModel';
+import { postOperationEntry } from './lib/ledger';
 
 export const saveWallet = internalMutation({
 	args: {
@@ -17,10 +20,13 @@ export const saveWallet = internalMutation({
 		ownerPolicyId: v.string(),
 		automationSignerId: v.optional(v.string()),
 		automationPolicyId: v.optional(v.string()),
+		purpose: v.optional(v.union(v.literal('treasury'), v.literal('collection'))),
+		invoiceId: v.optional(v.id('invoices')),
 		provider: v.any(),
 		correlationId: v.string(),
 		actorId: v.string()
 	},
+	returns: v.id('wallets'),
 	handler: async (ctx, args) => {
 		const provider = args.provider as Record<string, unknown>;
 		const privyWalletId = String(provider.id);
@@ -50,6 +56,8 @@ export const saveWallet = internalMutation({
 				args.ownerPolicyId,
 				...(args.automationPolicyId ? [args.automationPolicyId] : [])
 			],
+			purpose: args.purpose,
+			invoiceId: args.invoiceId,
 			syncVersion: 1,
 			syncedAt: Date.now()
 		});
@@ -71,11 +79,13 @@ export const savePolicy = internalMutation({
 	args: {
 		organizationId: v.id('organizations'),
 		name: v.string(),
+		kind: v.union(v.literal('owner'), v.literal('signerOverride'), v.literal('sweep')),
 		provider: v.any(),
 		correlationId: v.string(),
 		actorId: v.string(),
 		json: v.any()
 	},
+	returns: v.id('policies'),
 	handler: async (ctx, args) => {
 		const provider = args.provider as Record<string, unknown>;
 		const id = String(provider.id);
@@ -84,7 +94,7 @@ export const savePolicy = internalMutation({
 			privyPolicyId: id,
 			name: args.name,
 			version: 1,
-			kind: 'owner',
+			kind: args.kind,
 			json: args.json,
 			status: 'active',
 			createdAt: Date.now()
@@ -104,6 +114,7 @@ export const savePolicy = internalMutation({
 });
 export const saveIntent = internalMutation({
 	args: { operationId: v.id('operations'), provider: v.any(), type: v.string() },
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const operation = await ctx.db.get(args.operationId);
 		if (!operation) throw new Error('Operation not found.');
@@ -133,6 +144,7 @@ export const saveIntent = internalMutation({
 			correlationId: operation.correlationId,
 			privyIds: [id]
 		});
+		return null;
 	}
 });
 export const saveWalletAction = internalMutation({
@@ -141,6 +153,7 @@ export const saveWalletAction = internalMutation({
 		provider: v.any(),
 		providerReferenceId: v.optional(v.string())
 	},
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const operation = await ctx.db.get(args.operationId);
 		if (!operation) throw new Error('Operation not found.');
@@ -156,6 +169,7 @@ export const saveWalletAction = internalMutation({
 			raw: provider
 		});
 		await ctx.db.patch(operation._id, { status: 'pendingConfirmation', updatedAt: Date.now() });
+		return null;
 	}
 });
 export const updateOperationStatus = internalMutation({
@@ -175,15 +189,18 @@ export const updateOperationStatus = internalMutation({
 		),
 		errorCode: v.optional(v.string())
 	},
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const operation = await ctx.db.get(args.operationId);
-		if (!operation) return;
+		if (!operation) return null;
 		const status = monotonicStatus(operation.status, args.status);
 		await ctx.db.patch(args.operationId, {
 			status,
 			errorCode: args.errorCode,
 			updatedAt: Date.now()
 		});
+		await syncLinkedFinancialRecord(ctx, operation, status);
+		return null;
 	}
 });
 
@@ -193,15 +210,22 @@ export const applyProviderState = internalMutation({
 		provider: v.any(),
 		source: v.union(v.literal('webhook'), v.literal('reconciliation'))
 	},
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const operation = await ctx.db.get(args.operationId);
-		if (!operation) return;
+		if (!operation) return null;
 		const provider = args.provider as Record<string, unknown>;
 		const providerStatus = String(provider.status ?? '').toLowerCase();
 		const mapped = providerOperationStatus(provider);
-		if (!mapped) return;
+		if (!mapped) return null;
 		const status = monotonicStatus(operation.status, mapped);
 		await ctx.db.patch(operation._id, { status, updatedAt: Date.now() });
+		await syncLinkedFinancialRecord(
+			ctx,
+			operation,
+			status,
+			typeof provider.transaction_hash === 'string' ? provider.transaction_hash : undefined
+		);
 		await appendAudit(ctx, {
 			organizationId: operation.organizationId,
 			actorType: args.source === 'webhook' ? 'privy' : 'system',
@@ -215,8 +239,57 @@ export const applyProviderState = internalMutation({
 				typeof provider.transaction_hash === 'string' ? provider.transaction_hash : undefined,
 			metadata: { providerStatus, source: args.source }
 		});
+		return null;
 	}
 });
+
+async function syncLinkedFinancialRecord(
+	ctx: GenericMutationCtx<DataModel>,
+	operation: Doc<'operations'>,
+	status: Doc<'operations'>['status'],
+	transactionHash?: string
+) {
+	const now = Date.now();
+	if (status === 'succeeded') await postOperationEntry(ctx, operation, transactionHash);
+	if (operation.sourcePayableId) {
+		const payable = await ctx.db.get(operation.sourcePayableId);
+		if (payable) {
+			if (status === 'succeeded')
+				await ctx.db.patch(payable._id, { status: 'paid', updatedAt: now });
+			else if (['failed', 'rejected', 'expired', 'cancelled'].includes(status))
+				await ctx.db.patch(payable._id, { status: 'failed', updatedAt: now });
+		}
+	}
+	if (operation.sourceBatchItemId) {
+		const item = await ctx.db.get(operation.sourceBatchItemId);
+		if (!item) return;
+		const itemStatus =
+			status === 'succeeded'
+				? ('succeeded' as const)
+				: ['failed', 'rejected', 'expired', 'cancelled'].includes(status)
+					? ('failed' as const)
+					: status === 'pendingApproval'
+						? ('pendingApproval' as const)
+						: status === 'executing' || status === 'pendingConfirmation'
+							? ('processing' as const)
+							: ('queued' as const);
+		await ctx.db.patch(item._id, { status: itemStatus });
+		const items = await ctx.db
+			.query('paymentBatchItems')
+			.withIndex('by_batch', (q) => q.eq('batchId', item.batchId))
+			.take(100);
+		const statuses = items.map((batchItem) =>
+			batchItem._id === item._id ? itemStatus : batchItem.status
+		);
+		const batchStatus = statuses.every((value) => value === 'succeeded')
+			? ('completed' as const)
+			: statuses.some((value) => value === 'failed') &&
+				  statuses.every((value) => value === 'failed' || value === 'succeeded')
+				? ('failed' as const)
+				: ('processing' as const);
+		await ctx.db.patch(item.batchId, { status: batchStatus, updatedAt: now });
+	}
+}
 export const markRun = internalMutation({
 	args: {
 		runId: v.id('automationRuns'),
@@ -228,23 +301,28 @@ export const markRun = internalMutation({
 		),
 		operationId: v.optional(v.id('operations'))
 	},
-	handler: (ctx, args) =>
-		ctx.db.patch(args.runId, {
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		await ctx.db.patch(args.runId, {
 			status: args.status,
 			operationId: args.operationId,
 			updatedAt: Date.now()
-		})
+		});
+		return null;
+	}
 });
 export const updateWalletSync = internalMutation({
 	args: { walletId: v.id('wallets'), provider: v.any() },
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const wallet = await ctx.db.get(args.walletId);
-		if (!wallet) return;
+		if (!wallet) return null;
 		const provider = args.provider as Record<string, unknown>;
 		await ctx.db.patch(args.walletId, {
 			address: String(provider.address ?? wallet.address),
 			syncVersion: wallet.syncVersion + 1,
 			syncedAt: Date.now()
 		});
+		return null;
 	}
 });

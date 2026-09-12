@@ -3,6 +3,7 @@ import { internalMutation } from './_generated/server';
 
 export const createOperation = internalMutation({
 	args: { runId: v.id('automationRuns') },
+	returns: v.id('operations'),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
 		if (!run) throw new Error('Run missing.');

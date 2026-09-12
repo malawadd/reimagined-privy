@@ -2,7 +2,15 @@ import { v } from 'convex/values';
 import { internalMutation } from './_generated/server';
 import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
-import { BASE_SEPOLIA, deterministicRunKey, normalizeDecimal } from '../lib/domain';
+import { postBalancedEntry } from './lib/ledger';
+import {
+	BASE_SEPOLIA,
+	decimalToUnits,
+	deterministicRunKey,
+	normalizeDecimal,
+	normalizeEvmAddress,
+	unitsToDecimal
+} from '../lib/domain';
 
 function asString(value: unknown): string | undefined {
 	if (typeof value === 'string' && value.trim()) return value.trim();
@@ -27,6 +35,7 @@ export const insertReceipt = internalMutation({
 		eventType: v.string(),
 		payload: v.any()
 	},
+	returns: v.object({ duplicate: v.boolean(), receiptId: v.id('webhookReceipts') }),
 	handler: async (ctx, args) => {
 		const existing = await ctx.db
 			.query('webhookReceipts')
@@ -50,15 +59,19 @@ export const insertReceipt = internalMutation({
 
 export const markProcessed = internalMutation({
 	args: { receiptId: v.id('webhookReceipts'), error: v.optional(v.string()) },
-	handler: async (ctx, args) =>
-		ctx.db.patch(args.receiptId, { processedAt: Date.now(), processingError: args.error })
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		await ctx.db.patch(args.receiptId, { processedAt: Date.now(), processingError: args.error });
+		return null;
+	}
 });
 
 export const processReceipt = internalMutation({
 	args: { receiptId: v.id('webhookReceipts') },
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		const receipt = await ctx.db.get(args.receiptId);
-		if (!receipt || receipt.processedAt) return;
+		if (!receipt || receipt.processedAt) return null;
 		const payload = receipt.payload as Record<string, unknown>;
 		const data = (payload.data ?? payload) as Record<string, unknown>;
 		const provider = { ...data, id: data.id ?? data.wallet_action_id ?? data.intent_id };
@@ -91,6 +104,7 @@ export const processReceipt = internalMutation({
 			});
 
 		if (receipt.eventType.toLowerCase().includes('deposit')) {
+			const officialFundsDeposit = receipt.eventType === 'wallet.funds_deposited';
 			const asset = (
 				asString(data.asset) ??
 				asString(data.currency) ??
@@ -99,6 +113,9 @@ export const processReceipt = internalMutation({
 				''
 			).toLowerCase();
 			const isUsdc = asset === 'usdc' || asset === BASE_SEPOLIA.usdc.toLowerCase();
+			const supportedChain = officialFundsDeposit
+				? asString(data.caip2) === BASE_SEPOLIA.caip2
+				: true;
 			const rawAmount =
 				asString(data.amount) ??
 				asString(data.value) ??
@@ -109,10 +126,20 @@ export const processReceipt = internalMutation({
 				nestedString(data.wallet, ['address']) ??
 				''
 			).toLowerCase();
+			let indexedWalletAddress: string | undefined;
+			try {
+				indexedWalletAddress = walletAddress ? normalizeEvmAddress(walletAddress) : undefined;
+			} catch {
+				indexedWalletAddress = undefined;
+			}
 
 			let amount: string | undefined;
 			try {
-				amount = rawAmount ? normalizeDecimal(rawAmount, 6) : undefined;
+				amount = rawAmount
+					? officialFundsDeposit
+						? unitsToDecimal(rawAmount, 6)
+						: normalizeDecimal(rawAmount, 6)
+					: undefined;
 			} catch {
 				// An unrecognized amount must never become a transfer.
 			}
@@ -122,17 +149,91 @@ export const processReceipt = internalMutation({
 						.query('wallets')
 						.withIndex('by_privy_id', (q) => q.eq('privyWalletId', walletId))
 						.first()
-				: walletAddress
-					? (await ctx.db.query('wallets').collect()).find(
-							(wallet) => wallet.address.toLowerCase() === walletAddress
-						)
+				: indexedWalletAddress
+					? await ctx.db
+							.query('wallets')
+							.withIndex('by_address', (q) => q.eq('address', indexedWalletAddress))
+							.first()
 					: null;
 
-			if (isUsdc && amount && sourceWallet) {
+			if (isUsdc && supportedChain && amount && sourceWallet) {
+				if (sourceWallet.invoiceId && rawAmount) {
+					const invoice = await ctx.db.get(sourceWallet.invoiceId);
+					const existingPayment = await ctx.db
+						.query('invoicePayments')
+						.withIndex('by_receipt', (q) => q.eq('webhookReceiptId', receipt._id))
+						.unique();
+					if (invoice && !existingPayment) {
+						const transactionHash =
+							asString(data.transaction_hash) ?? asString(data.tx_hash) ?? 'unavailable';
+						const sender = asString(data.sender) ?? 'unavailable';
+						const blockValue = nestedString(data.block, ['number']);
+						const blockNumber = blockValue ? Number(blockValue) : undefined;
+						await ctx.db.insert('invoicePayments', {
+							organizationId: invoice.organizationId,
+							invoiceId: invoice._id,
+							walletId: sourceWallet._id,
+							webhookReceiptId: receipt._id,
+							asset: 'USDC',
+							amount,
+							rawAmount,
+							transactionHash,
+							sender,
+							blockNumber:
+								blockNumber !== undefined && Number.isSafeInteger(blockNumber)
+									? blockNumber
+									: undefined,
+							receivedAt: Date.now()
+						});
+						const paidUnits = decimalToUnits(invoice.paidAmount, 6) + decimalToUnits(amount, 6);
+						const invoiceUnits = decimalToUnits(invoice.amount, 6);
+						const nextStatus =
+							invoice.status === 'void'
+								? 'void'
+								: paidUnits >= invoiceUnits
+									? 'paid'
+									: 'partiallyPaid';
+						await ctx.db.patch(invoice._id, {
+							paidAmount: unitsToDecimal(paidUnits.toString(), 6),
+							status: nextStatus,
+							updatedAt: Date.now()
+						});
+						const payment = await ctx.db
+							.query('invoicePayments')
+							.withIndex('by_receipt', (q) => q.eq('webhookReceiptId', receipt._id))
+							.unique();
+						if (payment)
+							await postBalancedEntry(ctx, {
+								organizationId: invoice.organizationId,
+								sourceKey: `invoicePayment:${payment._id}`,
+								sourceType: 'invoicePayment',
+								sourceId: payment._id,
+								debitAccount: `Wallet:collection:${sourceWallet._id}`,
+								creditAccount: 'Accounts receivable',
+								asset: 'USDC',
+								amount,
+								transactionHash,
+								occurredAt: Date.now()
+							});
+						await ctx.db.insert('auditEvents', {
+							organizationId: invoice.organizationId,
+							actorType: 'privy',
+							actorId: 'privy-webhook',
+							action: 'invoice.payment_received',
+							resourceType: 'invoice',
+							resourceId: invoice._id,
+							correlationId: `invoice:${invoice._id}`,
+							privyIds: [sourceWallet.privyWalletId],
+							transactionHash,
+							metadata: { amount, asset: 'USDC', sourceEventId: receipt.svixMessageId },
+							occurredAt: Date.now()
+						});
+					}
+				}
 				const automations = await ctx.db
 					.query('automations')
 					.withIndex('by_org', (q) => q.eq('organizationId', sourceWallet.organizationId))
-					.collect();
+					.take(100);
 				for (const automation of automations) {
 					if (
 						automation.type !== 'depositSweep' ||
@@ -175,5 +276,6 @@ export const processReceipt = internalMutation({
 			}
 		}
 		await ctx.db.patch(args.receiptId, { processedAt: Date.now() });
+		return null;
 	}
 });

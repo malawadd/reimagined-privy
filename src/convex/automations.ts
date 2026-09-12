@@ -15,8 +15,39 @@ const input = {
 	amount: v.optional(v.string()),
 	policySummary: v.string()
 };
+
+export const list = query({
+	args: { organizationId: v.id('organizations') },
+	returns: v.array(
+		v.object({
+			_id: v.id('automations'),
+			_creationTime: v.number(),
+			organizationId: v.id('organizations'),
+			name: v.string(),
+			type: v.union(v.literal('recurringPayment'), v.literal('depositSweep')),
+			status: v.union(v.literal('active'), v.literal('paused')),
+			servicePrincipalId: v.id('servicePrincipals'),
+			schedule: v.optional(v.string()),
+			sourceWalletId: v.optional(v.id('wallets')),
+			destination: v.string(),
+			asset: v.literal('USDC'),
+			amount: v.optional(v.string()),
+			nextRunAt: v.optional(v.number()),
+			policySummary: v.string(),
+			createdBy: v.id('users')
+		})
+	),
+	handler: async (ctx, args) => {
+		await requireMembership(ctx, args.organizationId, 'wallet:read');
+		return ctx.db
+			.query('automations')
+			.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+			.take(100);
+	}
+});
 export const create = mutation({
 	args: input,
+	returns: v.id('automations'),
 	handler: async (ctx, args) => {
 		const { user } = await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const principal = await ctx.db.get(args.servicePrincipalId);
@@ -35,35 +66,58 @@ export const update = mutation({
 	args: {
 		organizationId: v.id('organizations'),
 		automationId: v.id('automations'),
-		patch: v.any()
+		name: v.optional(v.string()),
+		schedule: v.optional(v.string()),
+		amount: v.optional(v.string()),
+		nextRunAt: v.optional(v.number()),
+		policySummary: v.optional(v.string())
 	},
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
-		await ctx.db.patch(args.automationId, args.patch);
+		const name = args.name?.trim();
+		const policySummary = args.policySummary?.trim();
+		if (name !== undefined && (!name || name.length > 80))
+			throw new Error('Automation name must be 1 to 80 characters.');
+		if (policySummary !== undefined && (!policySummary || policySummary.length > 240))
+			throw new Error('Policy summary must be 1 to 240 characters.');
+		await ctx.db.patch(args.automationId, {
+			...(name !== undefined ? { name } : {}),
+			...(args.schedule !== undefined ? { schedule: args.schedule.trim() } : {}),
+			...(args.amount !== undefined ? { amount: normalizeDecimal(args.amount, 6) } : {}),
+			...(args.nextRunAt !== undefined ? { nextRunAt: args.nextRunAt } : {}),
+			...(policySummary !== undefined ? { policySummary } : {})
+		});
+		return null;
 	}
 });
 export const pause = mutation({
 	args: { organizationId: v.id('organizations'), automationId: v.id('automations') },
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
 		await ctx.db.patch(args.automationId, { status: 'paused' });
+		return null;
 	}
 });
 export const resume = mutation({
 	args: { organizationId: v.id('organizations'), automationId: v.id('automations') },
+	returns: v.null(),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
 		await ctx.db.patch(args.automationId, { status: 'active' });
+		return null;
 	}
 });
 export const runNow = mutation({
 	args: { organizationId: v.id('organizations'), automationId: v.id('automations') },
+	returns: v.id('automationRuns'),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
@@ -90,14 +144,38 @@ export const runNow = mutation({
 });
 export const listRuns = query({
 	args: { organizationId: v.id('organizations'), automationId: v.id('automations') },
+	returns: v.array(
+		v.object({
+			_id: v.id('automationRuns'),
+			_creationTime: v.number(),
+			organizationId: v.id('organizations'),
+			automationId: v.id('automations'),
+			runKey: v.string(),
+			amount: v.optional(v.string()),
+			sourceEventId: v.optional(v.string()),
+			scheduledFor: v.optional(v.number()),
+			status: v.union(
+				v.literal('pending'),
+				v.literal('claimed'),
+				v.literal('submitted'),
+				v.literal('succeeded'),
+				v.literal('failed'),
+				v.literal('ambiguous')
+			),
+			claimedAt: v.optional(v.number()),
+			providerReferenceId: v.string(),
+			operationId: v.optional(v.id('operations')),
+			updatedAt: v.number()
+		})
+	),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'wallet:read');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
 		return ctx.db
 			.query('automationRuns')
-			.filter((q) => q.eq(q.field('automationId'), args.automationId))
+			.withIndex('by_automation', (q) => q.eq('automationId', args.automationId))
 			.order('desc')
-			.collect();
+			.take(100);
 	}
 });

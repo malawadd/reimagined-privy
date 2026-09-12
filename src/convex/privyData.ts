@@ -1,8 +1,16 @@
 import { v } from 'convex/values';
 import { internalQuery } from './_generated/server';
+import { operationDocumentValidator, walletDocumentValidator } from './lib/validators';
 
 export const getOperationBundle = internalQuery({
 	args: { operationId: v.id('operations') },
+	returns: v.object({
+		operation: operationDocumentValidator,
+		principal: v.any(),
+		wallet: v.union(v.null(), walletDocumentValidator),
+		intent: v.any(),
+		walletAction: v.any()
+	}),
 	handler: async (ctx, args) => {
 		const operation = await ctx.db.get(args.operationId);
 		if (!operation) throw new Error('Operation not found.');
@@ -10,13 +18,18 @@ export const getOperationBundle = internalQuery({
 			? null
 			: await ctx.db
 					.query('servicePrincipals')
-					.withIndex('by_org', (q) => q.eq('organizationId', operation.organizationId))
-					.filter((q) => q.eq(q.field('status'), 'active'))
+					.withIndex('by_org_status', (q) =>
+						q.eq('organizationId', operation.organizationId).eq('status', 'active')
+					)
 					.first();
-		const wallet = await ctx.db
-			.query('wallets')
-			.withIndex('by_org', (q) => q.eq('organizationId', operation.organizationId))
-			.first();
+		const wallet = operation.sourceWalletId
+			? await ctx.db.get(operation.sourceWalletId)
+			: await ctx.db
+					.query('wallets')
+					.withIndex('by_org', (q) => q.eq('organizationId', operation.organizationId))
+					.first();
+		if (wallet && wallet.organizationId !== operation.organizationId)
+			throw new Error('Operation source wallet is invalid.');
 		const intent = await ctx.db
 			.query('intentSnapshots')
 			.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
@@ -30,6 +43,12 @@ export const getOperationBundle = internalQuery({
 });
 export const getAutomationBundle = internalQuery({
 	args: { runId: v.id('automationRuns') },
+	returns: v.object({
+		run: v.any(),
+		automation: v.any(),
+		principal: v.any(),
+		wallet: walletDocumentValidator
+	}),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
 		if (!run) throw new Error('Run not found.');
@@ -48,28 +67,31 @@ export const getAutomationBundle = internalQuery({
 });
 export const getWallet = internalQuery({
 	args: { walletId: v.id('wallets') },
+	returns: v.union(v.null(), walletDocumentValidator),
 	handler: (ctx, args) => ctx.db.get(args.walletId)
 });
 export const listPending = internalQuery({
 	args: {},
+	returns: v.object({
+		operations: v.array(operationDocumentValidator),
+		staleRuns: v.array(v.any())
+	}),
 	handler: async (ctx) => ({
-		operations: await ctx.db
-			.query('operations')
-			.filter((q) =>
-				q.or(
-					q.eq(q.field('status'), 'pendingApproval'),
-					q.eq(q.field('status'), 'executing'),
-					q.eq(q.field('status'), 'pendingConfirmation')
+		operations: (
+			await Promise.all(
+				(['pendingApproval', 'executing', 'pendingConfirmation'] as const).map((status) =>
+					ctx.db
+						.query('operations')
+						.withIndex('by_status', (q) => q.eq('status', status))
+						.order('desc')
+						.take(100)
 				)
 			)
-			.take(100),
+		).flat(),
 		staleRuns: await ctx.db
 			.query('automationRuns')
-			.filter((q) =>
-				q.and(
-					q.eq(q.field('status'), 'ambiguous'),
-					q.lt(q.field('updatedAt'), Date.now() - 300_000)
-				)
+			.withIndex('by_status', (q) =>
+				q.eq('status', 'ambiguous').lt('updatedAt', Date.now() - 300_000)
 			)
 			.take(100)
 	})

@@ -12,4 +12,5 @@ crons.interval(
 	{ minutes: 5 },
 	internal.privyActions.reconcilePending
 );
+crons.interval('mark overdue invoices', { hours: 1 }, internal.invoiceState.markOverdue);
 export default crons;
