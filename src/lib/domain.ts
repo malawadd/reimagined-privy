@@ -69,6 +69,17 @@ export function decimalToUnits(value: string, decimals: number): bigint {
 	return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0') || '0');
 }
 
+export function unitsToDecimal(rawValue: string, decimals: number): string {
+	if (!/^\d+$/.test(rawValue)) throw new Error('Raw amount must be a non-negative integer string.');
+	if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36)
+		throw new Error('Asset decimals must be an integer between 0 and 36.');
+	if (decimals === 0) return BigInt(rawValue).toString();
+	const padded = rawValue.padStart(decimals + 1, '0');
+	const whole = padded.slice(0, -decimals).replace(/^0+(?=\d)/, '') || '0';
+	const fraction = padded.slice(-decimals).replace(/0+$/, '');
+	return fraction ? `${whole}.${fraction}` : whole;
+}
+
 export function normalizeEvmAddress(value: string): `0x${string}` {
 	if (!isAddress(value, { strict: true }))
 		throw new Error('Enter a valid checksummed or lowercase EVM address.');

@@ -14,8 +14,8 @@ export function compileTreasuryPolicy(input: PolicyTemplateInput) {
 		throw new Error('At least one approved automation recipient is required.');
 
 	return {
-		version: '1.0',
-		chain_type: 'ethereum',
+		version: '1.0' as const,
+		chain_type: 'ethereum' as const,
 		name: 'Base Sepolia automation controls',
 		rules: [
 			{
@@ -47,7 +47,7 @@ export function compileTreasuryPolicy(input: PolicyTemplateInput) {
 						value: approvedRecipients
 					}
 				],
-				action: 'ALLOW'
+				action: 'ALLOW' as const
 			},
 			{
 				name: 'Allow Base Sepolia USDC sweeps to treasury',
@@ -72,7 +72,7 @@ export function compileTreasuryPolicy(input: PolicyTemplateInput) {
 						value: treasuryDestination
 					}
 				],
-				action: 'ALLOW'
+				action: 'ALLOW' as const
 			}
 		]
 	};
@@ -80,8 +80,8 @@ export function compileTreasuryPolicy(input: PolicyTemplateInput) {
 
 export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls') {
 	return {
-		version: '1.0',
-		chain_type: 'ethereum',
+		version: '1.0' as const,
+		chain_type: 'ethereum' as const,
 		name,
 		rules: [
 			{
@@ -101,7 +101,7 @@ export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls'
 						value: BASE_SEPOLIA.transferChain
 					}
 				],
-				action: 'ALLOW'
+				action: 'ALLOW' as const
 			},
 			{
 				name: 'Allow owner Base Sepolia USDC transfers',
@@ -120,7 +120,7 @@ export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls'
 						value: BASE_SEPOLIA.transferChain
 					}
 				],
-				action: 'ALLOW'
+				action: 'ALLOW' as const
 			}
 		]
 	};

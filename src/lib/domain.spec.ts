@@ -7,13 +7,15 @@ import {
 	monotonicStatus,
 	normalizeDecimal,
 	normalizeEvmAddress,
-	selectPaymentRoute
+	selectPaymentRoute,
+	unitsToDecimal
 } from './domain';
 
 describe('money and address validation', () => {
 	it('normalizes decimal strings without floating point', () => {
 		expect(normalizeDecimal('001.2300', 6)).toBe('1.23');
 		expect(decimalToUnits('100.000001', 6)).toBe(100000001n);
+		expect(unitsToDecimal('12500000', 6)).toBe('12.5');
 	});
 	it('rejects excess precision and invalid addresses', () => {
 		expect(() => normalizeDecimal('1.0000001', 6)).toThrow();

@@ -32,7 +32,12 @@ export default defineSchema({
 		name: v.string(),
 		slug: v.string(),
 		createdByUserId: v.id('users'),
-		active: v.boolean()
+		active: v.boolean(),
+		pilotUseCase: v.optional(v.string()),
+		pilotContactEmail: v.optional(v.string()),
+		requestedAt: v.optional(v.number()),
+		approvedAt: v.optional(v.number()),
+		approvedByPrivyDid: v.optional(v.string())
 	}).index('by_slug', ['slug']),
 	memberships: defineTable({
 		organizationId: v.id('organizations'),
@@ -56,7 +61,9 @@ export default defineSchema({
 		purpose: v.string(),
 		privyAuthorizationKeyId: v.string(),
 		status: v.union(v.literal('active'), v.literal('revoked'))
-	}).index('by_org', ['organizationId']),
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_org_status', ['organizationId', 'status']),
 	wallets: defineTable({
 		organizationId: v.id('organizations'),
 		privyWalletId: v.string(),
@@ -68,10 +75,25 @@ export default defineSchema({
 		signerIds: v.array(v.string()),
 		policyIds: v.array(v.string()),
 		syncVersion: v.number(),
-		syncedAt: v.number()
+		syncedAt: v.number(),
+		purpose: v.optional(v.union(v.literal('treasury'), v.literal('collection'))),
+		invoiceId: v.optional(v.id('invoices'))
 	})
 		.index('by_org', ['organizationId'])
-		.index('by_privy_id', ['privyWalletId']),
+		.index('by_privy_id', ['privyWalletId'])
+		.index('by_address', ['address']),
+	walletBalances: defineTable({
+		organizationId: v.id('organizations'),
+		walletId: v.id('wallets'),
+		chainId: v.literal(84532),
+		asset: v.union(v.literal('ETH'), v.literal('USDC')),
+		rawValue: v.string(),
+		decimals: v.number(),
+		displayValue: v.string(),
+		observedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_wallet_asset', ['walletId', 'asset']),
 	policies: defineTable({
 		organizationId: v.id('organizations'),
 		privyPolicyId: v.string(),
@@ -118,14 +140,21 @@ export default defineSchema({
 		destination: v.optional(v.string()),
 		memo: v.optional(v.string()),
 		reference: v.string(),
+		requestKey: v.optional(v.string()),
 		createdBy: v.optional(v.id('users')),
+		sourceWalletId: v.optional(v.id('wallets')),
 		automationRunId: v.optional(v.id('automationRuns')),
+		sourcePayableId: v.optional(v.id('payables')),
+		sourceBatchItemId: v.optional(v.id('paymentBatchItems')),
 		correlationId: v.string(),
 		errorCode: v.optional(v.string()),
 		createdAt: v.number(),
 		updatedAt: v.number()
 	})
 		.index('by_org', ['organizationId'])
+		.index('by_org_status', ['organizationId', 'status'])
+		.index('by_status', ['status', 'updatedAt'])
+		.index('by_org_request', ['organizationId', 'requestKey'])
 		.index('by_correlation', ['correlationId']),
 	intentSnapshots: defineTable({
 		organizationId: v.id('organizations'),
@@ -178,7 +207,139 @@ export default defineSchema({
 		createdBy: v.id('users')
 	})
 		.index('by_org', ['organizationId'])
+		.index('by_source_wallet', ['sourceWalletId'])
 		.index('by_due', ['status', 'nextRunAt']),
+	invoices: defineTable({
+		organizationId: v.id('organizations'),
+		invoiceNumber: v.string(),
+		customerName: v.string(),
+		customerEmail: v.optional(v.string()),
+		asset: v.literal('USDC'),
+		amount: v.string(),
+		paidAmount: v.string(),
+		dueAt: v.number(),
+		status: v.union(
+			v.literal('provisioning'),
+			v.literal('issued'),
+			v.literal('partiallyPaid'),
+			v.literal('paid'),
+			v.literal('overdue'),
+			v.literal('void'),
+			v.literal('failed')
+		),
+		lineItems: v.array(
+			v.object({ description: v.string(), quantity: v.string(), unitAmount: v.string() })
+		),
+		notes: v.optional(v.string()),
+		treasuryWalletId: v.id('wallets'),
+		collectionWalletId: v.optional(v.id('wallets')),
+		publicTokenHash: v.string(),
+		publicTokenCreatedAt: v.number(),
+		createdBy: v.id('users'),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_org_number', ['organizationId', 'invoiceNumber'])
+		.index('by_status_due', ['status', 'dueAt'])
+		.index('by_public_token', ['publicTokenHash']),
+	invoicePayments: defineTable({
+		organizationId: v.id('organizations'),
+		invoiceId: v.id('invoices'),
+		walletId: v.id('wallets'),
+		webhookReceiptId: v.id('webhookReceipts'),
+		asset: v.literal('USDC'),
+		amount: v.string(),
+		rawAmount: v.string(),
+		transactionHash: v.string(),
+		sender: v.string(),
+		blockNumber: v.optional(v.number()),
+		receivedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_invoice', ['invoiceId'])
+		.index('by_receipt', ['webhookReceiptId']),
+	payables: defineTable({
+		organizationId: v.id('organizations'),
+		type: v.union(v.literal('bill'), v.literal('expense')),
+		reference: v.string(),
+		payeeName: v.string(),
+		recipientId: v.optional(v.id('recipients')),
+		destination: v.string(),
+		asset: v.literal('USDC'),
+		amount: v.string(),
+		dueAt: v.number(),
+		category: v.optional(v.string()),
+		memo: v.optional(v.string()),
+		receiptStorageId: v.optional(v.id('_storage')),
+		status: v.union(
+			v.literal('draft'),
+			v.literal('paymentQueued'),
+			v.literal('paid'),
+			v.literal('failed'),
+			v.literal('void')
+		),
+		operationId: v.optional(v.id('operations')),
+		createdBy: v.id('users'),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_operation', ['operationId'])
+		.index('by_org_reference', ['organizationId', 'reference']),
+	paymentBatches: defineTable({
+		organizationId: v.id('organizations'),
+		type: v.union(v.literal('batch'), v.literal('payroll')),
+		name: v.string(),
+		asset: v.literal('USDC'),
+		totalAmount: v.string(),
+		itemCount: v.number(),
+		status: v.union(
+			v.literal('queued'),
+			v.literal('processing'),
+			v.literal('completed'),
+			v.literal('failed')
+		),
+		sourceWalletId: v.id('wallets'),
+		createdBy: v.id('users'),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	}).index('by_org', ['organizationId']),
+	paymentBatchItems: defineTable({
+		organizationId: v.id('organizations'),
+		batchId: v.id('paymentBatches'),
+		label: v.string(),
+		recipientId: v.optional(v.id('recipients')),
+		destination: v.string(),
+		amount: v.string(),
+		memo: v.optional(v.string()),
+		status: v.union(
+			v.literal('queued'),
+			v.literal('pendingApproval'),
+			v.literal('processing'),
+			v.literal('succeeded'),
+			v.literal('failed')
+		),
+		operationId: v.optional(v.id('operations')),
+		requestKey: v.string()
+	})
+		.index('by_batch', ['batchId'])
+		.index('by_operation', ['operationId']),
+	ledgerEntries: defineTable({
+		organizationId: v.id('organizations'),
+		sourceKey: v.string(),
+		sourceType: v.union(v.literal('operation'), v.literal('invoicePayment')),
+		sourceId: v.string(),
+		account: v.string(),
+		direction: v.union(v.literal('debit'), v.literal('credit')),
+		asset: v.union(v.literal('ETH'), v.literal('USDC')),
+		amount: v.string(),
+		transactionHash: v.optional(v.string()),
+		occurredAt: v.number(),
+		createdAt: v.number()
+	})
+		.index('by_org_time', ['organizationId', 'occurredAt'])
+		.index('by_source_account', ['sourceKey', 'account']),
 	automationRuns: defineTable({
 		organizationId: v.id('organizations'),
 		automationId: v.id('automations'),
@@ -200,6 +361,8 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_run_key', ['runKey'])
+		.index('by_automation', ['automationId', 'updatedAt'])
+		.index('by_org_status', ['organizationId', 'status', 'updatedAt'])
 		.index('by_status', ['status', 'updatedAt']),
 	webhookReceipts: defineTable({
 		svixMessageId: v.string(),
