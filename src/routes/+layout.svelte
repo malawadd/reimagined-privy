@@ -14,8 +14,8 @@
 			isAuthenticated: Boolean(privyAuth.user),
 			fetchAccessToken: async () => {
 				const accessToken = await privyAuth.getAccessToken();
-				if (!accessToken || !env.PUBLIC_CONVEX_SITE_URL) return null;
-				const response = await fetch(`${env.PUBLIC_CONVEX_SITE_URL}/auth/exchange`, {
+				if (!accessToken) return null;
+				const response = await fetch('/api/auth/exchange', {
 					method: 'POST',
 					headers: { authorization: `Bearer ${accessToken}` }
 				});

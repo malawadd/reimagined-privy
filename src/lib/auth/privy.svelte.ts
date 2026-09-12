@@ -17,21 +17,12 @@ class PrivyAuthStore {
 	private client: Privy | null = null;
 	private iframe: HTMLIFrameElement | null = null;
 
-	get isMock() {
-		return (env.PUBLIC_PRIVY_MODE || 'mock') === 'mock';
-	}
-
 	async initialize() {
 		if (!browser || this.ready) return;
 		this.loading = true;
 		try {
-			if (this.isMock) {
-				const saved = localStorage.getItem('privy-starter:mock-user');
-				this.user = saved ? JSON.parse(saved) : null;
-				return;
-			}
 			if (!env.PUBLIC_PRIVY_APP_ID || !env.PUBLIC_PRIVY_CLIENT_ID) {
-				throw new Error('Privy app and client IDs are required in live mode.');
+				throw new Error('Ratib needs configured Privy app and client IDs.');
 			}
 			this.client = new Privy({
 				appId: env.PUBLIC_PRIVY_APP_ID,
@@ -74,52 +65,39 @@ class PrivyAuthStore {
 
 	async sendEmailCode(email: string) {
 		this.error = null;
-		if (this.isMock) {
+		if (!this.client) throw new Error('Privy is not initialized.');
+		try {
+			await this.client.auth.email.sendCode(email);
 			this.codeSent = true;
-			return;
+		} catch (error) {
+			this.error = error instanceof Error ? error.message : 'Unable to send a sign-in code.';
+			throw error;
 		}
-		await this.client?.auth.email.sendCode(email);
-		this.codeSent = true;
 	}
 
 	async loginWithEmail(email: string, code: string) {
 		this.loading = true;
 		this.error = null;
 		try {
-			if (this.isMock) {
-				if (code !== '123456') throw new Error('Use 123456 in mock mode.');
-				this.user = {
-					id: 'did:privy:mock-operator',
-					email,
-					name: email.split('@')[0] || 'Operator'
-				};
-				localStorage.setItem('privy-starter:mock-user', JSON.stringify(this.user));
-				return;
-			}
+			if (!this.client) throw new Error('Privy is not initialized.');
 			const result = await this.client!.auth.email.loginWithCode(email, code);
 			this.user = toConsoleUser(result.user);
+		} catch (error) {
+			this.error = error instanceof Error ? error.message : 'Unable to sign in.';
+			throw error;
 		} finally {
 			this.loading = false;
 		}
 	}
 
 	async loginWithGoogle() {
-		if (this.isMock) {
-			this.user = {
-				id: 'did:privy:mock-google',
-				email: 'operator@northstar.test',
-				name: 'Avery Stone'
-			};
-			localStorage.setItem('privy-starter:mock-user', JSON.stringify(this.user));
-			return;
-		}
+		if (!this.client) throw new Error('Privy is not initialized.');
 		const redirect = `${window.location.origin}/auth/callback`;
 		const result = await this.client!.auth.oauth.generateURL('google', redirect);
 		window.location.assign(result.url);
 	}
 
 	async completeOAuthLogin(search: string) {
-		if (this.isMock) return this.user;
 		if (!this.client) throw new Error('Privy is not initialized.');
 		const params = new URLSearchParams(search);
 		const code = params.get('privy_oauth_code');
@@ -131,13 +109,11 @@ class PrivyAuthStore {
 	}
 
 	async getAccessToken() {
-		if (this.isMock) return 'mock-privy-access-token';
 		return this.client?.getAccessToken() ?? null;
 	}
 
 	async logout() {
 		await this.client?.auth.logout({ userId: this.user?.id });
-		localStorage.removeItem('privy-starter:mock-user');
 		this.user = null;
 		this.codeSent = false;
 	}

@@ -3,7 +3,9 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { privyAuth } from '$lib/auth/privy.svelte';
-	import { organization } from '$lib/mock-data';
+	import { workspace } from '$lib/workspace.svelte';
+	import { api } from '../../convex/_generated/api';
+	import { useAuth, useMutation, useQuery } from 'convex-svelte';
 	import {
 		LayoutDashboard,
 		WalletCards,
@@ -17,20 +19,61 @@
 		Search,
 		Bell,
 		ChevronsUpDown,
-		LogOut
+		LogOut,
+		ContactRound,
+		FileText,
+		ReceiptText,
+		Layers3,
+		BookOpenCheck,
+		ListChecks,
+		BarChart3
 	} from '@lucide/svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 	let mobileOpen = $state(false);
+	let orgMenuOpen = $state(false);
+	let syncStarted = false;
+	const convexAuth = useAuth();
+	const syncCurrentUser = useMutation(api.users.syncCurrent);
+	const workspaces = useQuery(api.organizations.listMine, () =>
+		convexAuth.isAuthenticated ? {} : 'skip'
+	);
+	const currentUser = useQuery(api.users.getCurrent, () =>
+		convexAuth.isAuthenticated ? {} : 'skip'
+	);
+	const shellSummary = useQuery(api.dashboard.get, () =>
+		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
+	);
+	let workspaceRows = $derived(workspaces.data ?? []);
+	let activeWorkspace = $derived(
+		workspaceRows.find((row) => row.organization._id === workspace.activeOrganizationId) ??
+			workspaceRows[0]
+	);
 
-	const groups = [
+	const groups = $derived([
 		{
 			label: 'Workspace',
 			items: [
 				{ href: '/app', label: 'Overview', icon: LayoutDashboard },
 				{ href: '/app/wallets', label: 'Wallets', icon: WalletCards },
 				{ href: '/app/payments', label: 'Payments', icon: Send },
-				{ href: '/app/approvals', label: 'Approvals', icon: CheckSquare, count: 2 }
+				{ href: '/app/transactions', label: 'Transactions', icon: ListChecks },
+				{ href: '/app/counterparties', label: 'Counterparties', icon: ContactRound },
+				{
+					href: '/app/approvals',
+					label: 'Approvals',
+					icon: CheckSquare,
+					count: shellSummary.data?.pendingApprovalCount
+				}
+			]
+		},
+		{
+			label: 'Finance',
+			items: [
+				{ href: '/app/invoices', label: 'Invoices', icon: FileText },
+				{ href: '/app/payables', label: 'Bills & expenses', icon: ReceiptText },
+				{ href: '/app/batches', label: 'Batches & payroll', icon: Layers3 },
+				{ href: '/app/reports', label: 'Reports', icon: BarChart3 }
 			]
 		},
 		{
@@ -38,38 +81,98 @@
 			items: [
 				{ href: '/app/policies', label: 'Policies', icon: ShieldCheck },
 				{ href: '/app/automations', label: 'Automations', icon: Zap },
+				{ href: '/app/ledger', label: 'Ledger & reconcile', icon: BookOpenCheck },
 				{ href: '/app/team', label: 'Team', icon: Users },
 				{ href: '/app/audit', label: 'Audit log', icon: ScrollText }
 			]
 		},
 		{ label: 'System', items: [{ href: '/app/setup', label: 'Setup', icon: Settings }] }
-	];
+	]);
 
 	onMount(async () => {
 		await privyAuth.initialize();
+		if (!privyAuth.user) await goto('/login');
+	});
+
+	$effect(() => {
+		if (privyAuth.user && convexAuth.isAuthenticated && !syncStarted) {
+			syncStarted = true;
+			void syncCurrentUser({
+				email: privyAuth.user.email,
+				name: privyAuth.user.name
+			});
+		}
+	});
+
+	$effect(() => {
+		workspace.reconcile(workspaceRows.map((row) => row.organization._id));
 	});
 
 	async function signOut() {
 		await privyAuth.logout();
-		await goto('/');
+		await goto('/login');
+	}
+
+	function initials(value?: string) {
+		return (value || 'Ratib user')
+			.split(/\s+/)
+			.slice(0, 2)
+			.map((part) => part[0])
+			.join('')
+			.toUpperCase();
 	}
 </script>
 
 <div class="network-banner">
-	<span></span>Base Sepolia testnet <b>·</b>
-	{privyAuth.isMock ? 'Mock provider' : 'Live provider'}
+	<span></span>Base Sepolia testnet <b>·</b> Privy live controls
 </div>
 <div class="app-frame">
 	<aside class:mobile-open={mobileOpen}>
 		<div class="brand">
-			<div class="brand-mark">N</div>
-			<div><strong>NORTHSTAR</strong><small>Treasury operations</small></div>
+			<div class="brand-mark">R</div>
+			<div><strong>RATIB</strong><small>Finance OS</small></div>
 		</div>
-		<button class="org-switch"
-			><div class="org-avatar">NL</div>
-			<div><strong>{organization.name}</strong><span>Primary workspace</span></div>
-			<ChevronsUpDown size={14} /></button
-		>
+		<div class="org-picker">
+			<button
+				class="org-switch"
+				aria-haspopup="menu"
+				aria-expanded={orgMenuOpen}
+				onclick={() => (orgMenuOpen = !orgMenuOpen)}
+			>
+				<div class="org-avatar">{initials(activeWorkspace?.organization.name)}</div>
+				<div>
+					<strong
+						>{activeWorkspace?.organization.name ??
+							(workspaces.isLoading ? 'Loading…' : 'No workspace')}</strong
+					>
+					<span
+						>{activeWorkspace
+							? `${activeWorkspace.membership.role} workspace`
+							: 'Provisioning required'}</span
+					>
+				</div>
+				<ChevronsUpDown size={14} />
+			</button>
+			{#if orgMenuOpen && workspaceRows.length > 0}
+				<div class="org-menu" role="menu">
+					{#each workspaceRows as row}
+						<button
+							class:active={row.organization._id === workspace.activeOrganizationId}
+							role="menuitem"
+							onclick={() => {
+								workspace.select(row.organization._id);
+								orgMenuOpen = false;
+							}}
+						>
+							<span>{initials(row.organization.name)}</span>
+							<div>
+								<strong>{row.organization.name}</strong><small>{row.membership.role}</small>
+							</div>
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
 		<nav>
 			{#each groups as group}
 				<div class="nav-group">
@@ -88,9 +191,11 @@
 			{/each}
 		</nav>
 		<div class="sidebar-foot">
-			<div class="avatar">AS</div>
+			<div class="avatar">{initials(currentUser.data?.name ?? privyAuth.user?.name)}</div>
 			<div>
-				<strong>{privyAuth.user?.name ?? 'Avery Stone'}</strong><span>{organization.role}</span>
+				<strong>{currentUser.data?.name ?? privyAuth.user?.name ?? 'Signed-in user'}</strong><span
+					>{activeWorkspace?.membership.role ?? 'No active role'}</span
+				>
 			</div>
 			<button aria-label="Sign out" onclick={signOut}><LogOut size={16} /></button>
 		</div>

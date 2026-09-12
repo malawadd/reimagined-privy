@@ -1,11 +1,23 @@
 <script lang="ts">
 	let { status }: { status: string } = $props();
 	const tone = $derived(
-		status === 'succeeded' || status === 'active' || status === 'ready'
+		['succeeded', 'active', 'ready', 'paid', 'completed', 'approved'].includes(status)
 			? 'success'
-			: status === 'pendingApproval' || status === 'pendingConfirmation' || status === 'review'
+			: [
+						'pendingApproval',
+						'pendingConfirmation',
+						'review',
+						'queued',
+						'processing',
+						'provisioning',
+						'issued',
+						'partiallyPaid',
+						'overdue',
+						'claimed',
+						'submitted'
+				  ].includes(status)
 				? 'warning'
-				: status === 'failed' || status === 'rejected'
+				: ['failed', 'rejected', 'expired', 'cancelled', 'void', 'revoked'].includes(status)
 					? 'danger'
 					: 'neutral'
 	);
