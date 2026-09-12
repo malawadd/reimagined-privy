@@ -23,12 +23,32 @@ export const get = query({
 	}
 });
 export const provision = mutation({
-	args: { organizationId: v.id('organizations'), name: v.string(), ownerQuorumId: v.string() },
+	args: {
+		organizationId: v.id('organizations'),
+		name: v.string(),
+		ownerQuorumId: v.string(),
+		ownerPolicyId: v.id('policies'),
+		automationSignerId: v.optional(v.string()),
+		automationPolicyId: v.optional(v.id('policies'))
+	},
 	handler: async (ctx, args) => {
 		const { user } = await requireMembership(ctx, args.organizationId, 'wallet:manage');
+		const ownerPolicy = await ctx.db.get(args.ownerPolicyId);
+		assertOrgScoped(ownerPolicy, args.organizationId);
+		const automationPolicy = args.automationPolicyId
+			? await ctx.db.get(args.automationPolicyId)
+			: null;
+		if (automationPolicy) assertOrgScoped(automationPolicy, args.organizationId);
+		if (Boolean(args.automationSignerId) !== Boolean(automationPolicy))
+			throw new Error('An automation signer and override policy must be configured together.');
 		const correlationId = `wallet:${args.organizationId}:${Date.now()}`;
 		await ctx.scheduler.runAfter(0, internal.privyActions.provisionWallet, {
-			...args,
+			organizationId: args.organizationId,
+			name: args.name,
+			ownerQuorumId: args.ownerQuorumId,
+			ownerPolicyId: ownerPolicy.privyPolicyId,
+			automationSignerId: args.automationSignerId,
+			automationPolicyId: automationPolicy?.privyPolicyId,
 			correlationId,
 			actorId: user.privyDid
 		});

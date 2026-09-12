@@ -76,21 +76,22 @@ export function normalizeEvmAddress(value: string): `0x${string}` {
 }
 
 export function selectPaymentRoute(input: PaymentDraft): RouteDecision {
-	if (
-		input.asset === 'USDC' &&
-		input.recipientApproved &&
-		decimalToUnits(input.amount, 6) <= 100_000_000n
-	) {
+	const amount = decimalToUnits(input.amount, input.asset === 'USDC' ? 6 : 18);
+	if (amount <= 0n) {
+		return {
+			path: 'blocked',
+			reason: 'The transfer amount must be greater than zero.',
+			requiresPolicyChange: false
+		};
+	}
+	if (input.asset === 'USDC' && input.recipientApproved && amount <= 100_000_000n) {
 		return {
 			path: 'automationSigner',
 			reason: 'Approved recipient and amount is within the 100 USDC automation ceiling.',
 			requiresPolicyChange: false
 		};
 	}
-	if (
-		(input.asset === 'USDC' || input.asset === 'ETH') &&
-		decimalToUnits(input.amount, input.asset === 'USDC' ? 6 : 18) > 0n
-	) {
+	if (input.asset === 'USDC' || input.asset === 'ETH') {
 		return {
 			path: 'privyIntent',
 			reason: 'Owner quorum approval is required for this transfer.',

@@ -1,4 +1,4 @@
-import { BASE_SEPOLIA } from './domain';
+import { BASE_SEPOLIA, normalizeDecimal, normalizeEvmAddress } from './domain';
 
 export interface PolicyTemplateInput {
 	approvedRecipients: string[];
@@ -7,35 +7,120 @@ export interface PolicyTemplateInput {
 }
 
 export function compileTreasuryPolicy(input: PolicyTemplateInput) {
+	const approvedRecipients = input.approvedRecipients.map(normalizeEvmAddress);
+	const treasuryDestination = normalizeEvmAddress(input.treasuryDestination);
+	const automationLimitUsdc = normalizeDecimal(input.automationLimitUsdc ?? '100', 6);
+	if (approvedRecipients.length === 0)
+		throw new Error('At least one approved automation recipient is required.');
+
 	return {
 		version: '1.0',
 		chain_type: 'ethereum',
-		name: 'Base Sepolia treasury controls',
-		default_action: 'deny',
+		name: 'Base Sepolia automation controls',
 		rules: [
 			{
-				name: 'owner-approved-assets',
-				action: 'allow',
-				chain_id: BASE_SEPOLIA.chainId,
-				methods: ['eth_sendTransaction'],
-				assets: ['native', BASE_SEPOLIA.usdc]
+				name: 'Allow bounded Base Sepolia USDC vendor transfers',
+				method: 'transfer',
+				conditions: [
+					{
+						field_source: 'action_request_body',
+						field: 'source.asset',
+						operator: 'eq',
+						value: 'usdc'
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.chain',
+						operator: 'eq',
+						value: BASE_SEPOLIA.transferChain
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.amount',
+						operator: 'lte',
+						value: automationLimitUsdc
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'destination.address',
+						operator: 'in',
+						value: approvedRecipients
+					}
+				],
+				action: 'ALLOW'
 			},
 			{
-				name: 'automation-usdc-allowlist',
-				action: 'allow',
-				chain_id: BASE_SEPOLIA.chainId,
-				contract: BASE_SEPOLIA.usdc,
-				method: 'transfer(address,uint256)',
-				recipients: input.approvedRecipients,
-				max_amount: input.automationLimitUsdc ?? '100'
+				name: 'Allow Base Sepolia USDC sweeps to treasury',
+				method: 'transfer',
+				conditions: [
+					{
+						field_source: 'action_request_body',
+						field: 'source.asset',
+						operator: 'eq',
+						value: 'usdc'
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.chain',
+						operator: 'eq',
+						value: BASE_SEPOLIA.transferChain
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'destination.address',
+						operator: 'eq',
+						value: treasuryDestination
+					}
+				],
+				action: 'ALLOW'
+			}
+		]
+	};
+}
+
+export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls') {
+	return {
+		version: '1.0',
+		chain_type: 'ethereum',
+		name,
+		rules: [
+			{
+				name: 'Allow owner Base Sepolia ETH transfers',
+				method: 'transfer',
+				conditions: [
+					{
+						field_source: 'action_request_body',
+						field: 'source.asset',
+						operator: 'eq',
+						value: 'eth'
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.chain',
+						operator: 'eq',
+						value: BASE_SEPOLIA.transferChain
+					}
+				],
+				action: 'ALLOW'
 			},
 			{
-				name: 'event-sweep-destination',
-				action: 'allow',
-				chain_id: BASE_SEPOLIA.chainId,
-				contract: BASE_SEPOLIA.usdc,
-				method: 'transfer(address,uint256)',
-				recipients: [input.treasuryDestination]
+				name: 'Allow owner Base Sepolia USDC transfers',
+				method: 'transfer',
+				conditions: [
+					{
+						field_source: 'action_request_body',
+						field: 'source.asset',
+						operator: 'eq',
+						value: 'usdc'
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.chain',
+						operator: 'eq',
+						value: BASE_SEPOLIA.transferChain
+					}
+				],
+				action: 'ALLOW'
 			}
 		]
 	};

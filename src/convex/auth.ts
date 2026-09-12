@@ -9,11 +9,15 @@ export const exchange = internalAction({
 	args: { accessToken: v.string() },
 	handler: async (_ctx, args) => {
 		const appId = required('PRIVY_APP_ID');
-		const verified = await verifyAccessToken({
-			access_token: args.accessToken,
-			app_id: appId,
-			verification_key: required('PRIVY_JWT_VERIFICATION_KEY')
-		});
+		const mockAuthEnabled =
+			process.env.PRIVY_MODE === 'mock' && process.env.ALLOW_INSECURE_MOCK_AUTH === 'true';
+		const verified = mockAuthEnabled
+			? verifyLocalMockToken(args.accessToken, appId)
+			: await verifyAccessToken({
+					access_token: args.accessToken,
+					app_id: appId,
+					verification_key: required('PRIVY_JWT_VERIFICATION_KEY')
+				});
 		if (verified.app_id !== appId || verified.expiration <= Math.floor(Date.now() / 1000))
 			throw new Error('Invalid Privy access token.');
 		const issuer = required('AUTH_ISSUER');
@@ -34,4 +38,14 @@ function required(name: string): string {
 	const value = process.env[name];
 	if (!value) throw new Error(`${name} is not configured.`);
 	return value;
+}
+
+function verifyLocalMockToken(accessToken: string, appId: string) {
+	if (accessToken !== 'mock-privy-access-token') throw new Error('Invalid local mock token.');
+	return {
+		app_id: appId,
+		user_id: 'did:privy:mock-operator',
+		session_id: 'local-mock-session',
+		expiration: Math.floor(Date.now() / 1000) + 300
+	};
 }

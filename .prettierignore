@@ -1,5 +1,7 @@
 .agents/skills/
+.convex/
 .playwright-cli/
 output/
+src/convex/_generated/
 test-results/
 pnpm-lock.yaml

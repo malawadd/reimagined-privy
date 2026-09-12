@@ -6,9 +6,14 @@
 	let message = $state('Completing Google sign-in…');
 
 	onMount(async () => {
-		await privyAuth.initialize();
-		if (privyAuth.user) await goto('/app');
-		else message = 'Sign-in could not be restored. Return to login and try again.';
+		try {
+			await privyAuth.initialize();
+			if (!privyAuth.user) await privyAuth.completeOAuthLogin(window.location.search);
+			if (privyAuth.user) await goto('/app');
+			else message = 'Sign-in could not be restored. Return to login and try again.';
+		} catch (error) {
+			message = error instanceof Error ? error.message : 'Google sign-in could not be completed.';
+		}
 	});
 </script>
 

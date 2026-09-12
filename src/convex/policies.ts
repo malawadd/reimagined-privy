@@ -32,7 +32,12 @@ export const preview = query({
 	handler: async (_ctx, args) => compileTreasuryPolicy(args)
 });
 export const create = mutation({
-	args: { organizationId: v.id('organizations'), name: v.string(), json: v.any() },
+	args: {
+		organizationId: v.id('organizations'),
+		name: v.string(),
+		ownerQuorumId: v.string(),
+		json: v.any()
+	},
 	handler: async (ctx, args) => {
 		const { user } = await requireMembership(ctx, args.organizationId, 'policy:manage');
 		const correlationId = `policy-create:${args.organizationId}:${Date.now()}`;

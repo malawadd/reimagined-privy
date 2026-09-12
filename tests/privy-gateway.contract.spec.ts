@@ -13,8 +13,8 @@ describe('sanitized Privy provider contracts', () => {
 	});
 	it('retains native transfer intent lifecycle fields', () => {
 		expect(intentFixture).toMatchObject({
-			id: expect.stringMatching(/^intent_/),
-			type: 'TRANSFER',
+			intent_id: expect.stringMatching(/^intent_/),
+			intent_type: 'TRANSFER',
 			status: 'pending'
 		});
 	});

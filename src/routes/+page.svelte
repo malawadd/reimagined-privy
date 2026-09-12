@@ -4,8 +4,8 @@
 	import { privyAuth } from '$lib/auth/privy.svelte';
 	import { ArrowRight, Check, LockKeyhole, ShieldCheck, Workflow } from '@lucide/svelte';
 
-	let email = $state('operator@northstar.test');
-	let code = $state('123456');
+	let email = $state(privyAuth.isMock ? 'operator@northstar.test' : '');
+	let code = $state(privyAuth.isMock ? '123456' : '');
 
 	onMount(() => privyAuth.initialize());
 
@@ -90,7 +90,9 @@
 				<input id="email" type="email" bind:value={email} required />
 				{#if privyAuth.codeSent}
 					<div class="code-row">
-						<label for="code">One-time code</label><small>Mock code: 123456</small>
+						<label for="code">One-time code</label>{#if privyAuth.isMock}<small
+								>Mock code: 123456</small
+							>{/if}
 					</div>
 					<input id="code" inputmode="numeric" maxlength="6" bind:value={code} required />
 				{/if}

@@ -53,8 +53,9 @@ class PrivyAuthStore {
 				reload: () => this.iframe?.contentWindow?.location.reload()
 			});
 			window.addEventListener('message', (event) => {
-				if (event.source === this.iframe?.contentWindow)
-					this.client?.embeddedWallet.onMessage(event.data);
+				if (event.source !== this.iframe?.contentWindow) return;
+				const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+				this.client?.embeddedWallet.onMessage(data);
 			});
 			await this.client.initialize();
 			try {
@@ -115,6 +116,18 @@ class PrivyAuthStore {
 		const redirect = `${window.location.origin}/auth/callback`;
 		const result = await this.client!.auth.oauth.generateURL('google', redirect);
 		window.location.assign(result.url);
+	}
+
+	async completeOAuthLogin(search: string) {
+		if (this.isMock) return this.user;
+		if (!this.client) throw new Error('Privy is not initialized.');
+		const params = new URLSearchParams(search);
+		const code = params.get('privy_oauth_code');
+		const state = params.get('privy_oauth_state');
+		if (!code || !state) throw new Error('Privy OAuth callback parameters are missing.');
+		const result = await this.client.auth.oauth.loginWithCode(code, state, 'google');
+		this.user = toConsoleUser(result.user);
+		return this.user;
 	}
 
 	async getAccessToken() {

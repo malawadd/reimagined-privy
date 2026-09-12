@@ -1,6 +1,12 @@
 import { v } from 'convex/values';
 import { internalMutation } from './_generated/server';
 import { monotonicStatus } from '../lib/domain';
+import {
+	providerIntentProgress,
+	providerIntentType,
+	providerOperationStatus,
+	providerResourceId
+} from '../lib/privy';
 import { appendAudit } from './lib/audit';
 
 export const saveWallet = internalMutation({
@@ -8,6 +14,9 @@ export const saveWallet = internalMutation({
 		organizationId: v.id('organizations'),
 		name: v.string(),
 		ownerQuorumId: v.string(),
+		ownerPolicyId: v.string(),
+		automationSignerId: v.optional(v.string()),
+		automationPolicyId: v.optional(v.string()),
 		provider: v.any(),
 		correlationId: v.string(),
 		actorId: v.string()
@@ -36,8 +45,11 @@ export const saveWallet = internalMutation({
 			chainType: 'ethereum',
 			chainId: 84532,
 			ownerQuorumId: args.ownerQuorumId,
-			signerIds: [],
-			policyIds: [],
+			signerIds: args.automationSignerId ? [args.automationSignerId] : [],
+			policyIds: [
+				args.ownerPolicyId,
+				...(args.automationPolicyId ? [args.automationPolicyId] : [])
+			],
 			syncVersion: 1,
 			syncedAt: Date.now()
 		});
@@ -96,15 +108,17 @@ export const saveIntent = internalMutation({
 		const operation = await ctx.db.get(args.operationId);
 		if (!operation) throw new Error('Operation not found.');
 		const provider = args.provider as Record<string, unknown>;
-		const id = String(provider.id);
+		const id = providerResourceId(provider);
+		const progress = providerIntentProgress(provider);
 		await ctx.db.insert('intentSnapshots', {
 			organizationId: operation.organizationId,
 			operationId: operation._id,
 			privyIntentId: id,
-			type: args.type,
+			type: providerIntentType(provider, args.type),
 			status: String(provider.status ?? 'pending'),
-			approvals: 0,
-			threshold: 2,
+			approvals: progress.approvals,
+			threshold: progress.threshold,
+			expiresAt: typeof provider.expires_at === 'number' ? provider.expires_at : undefined,
 			providerUpdatedAt: Date.now(),
 			raw: provider
 		});
@@ -184,7 +198,7 @@ export const applyProviderState = internalMutation({
 		if (!operation) return;
 		const provider = args.provider as Record<string, unknown>;
 		const providerStatus = String(provider.status ?? '').toLowerCase();
-		const mapped = mapProviderStatus(providerStatus);
+		const mapped = providerOperationStatus(provider);
 		if (!mapped) return;
 		const status = monotonicStatus(operation.status, mapped);
 		await ctx.db.patch(operation._id, { status, updatedAt: Date.now() });
@@ -234,16 +248,3 @@ export const updateWalletSync = internalMutation({
 		});
 	}
 });
-
-function mapProviderStatus(status: string) {
-	if (['confirmed', 'completed', 'succeeded', 'success'].includes(status))
-		return 'succeeded' as const;
-	if (status === 'rejected') return 'rejected' as const;
-	if (status === 'expired') return 'expired' as const;
-	if (['failed', 'error'].includes(status)) return 'failed' as const;
-	if (['executing', 'approved'].includes(status)) return 'executing' as const;
-	if (['broadcasted', 'pending_confirmation'].includes(status))
-		return 'pendingConfirmation' as const;
-	if (['pending', 'awaiting_approval'].includes(status)) return 'pendingApproval' as const;
-	return null;
-}

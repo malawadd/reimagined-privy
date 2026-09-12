@@ -8,12 +8,15 @@
 		"node": ">=22 <25"
 	},
 	"scripts": {
-		"dev": "vite dev",
+		"dev": "convex dev --start \"vite dev\"",
+		"dev:ui": "vite dev",
 		"build": "vite build",
 		"build:production": "cross-env DEPLOY_ENV=production vite build",
 		"preview": "vite preview",
 		"convex:dev": "convex dev",
+		"convex:env:local": "convex env set --deployment local --from-file .local/convex.local.env --force",
 		"convex:deploy": "convex deploy",
+		"privy:smoke": "node scripts/privy-live-smoke.mjs",
 		"keys:generate": "node scripts/generate-auth-keys.mjs",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
 import { internalMutation } from './_generated/server';
 import { internal } from './_generated/api';
+import type { Id } from './_generated/dataModel';
 import { BASE_SEPOLIA, deterministicRunKey, normalizeDecimal } from '../lib/domain';
 
 function asString(value: unknown): string | undefined {
@@ -67,20 +68,20 @@ export const processReceipt = internalMutation({
 		const intentId = String(
 			data.intent_id ?? (receipt.eventType.includes('intent') ? (data.id ?? '') : '')
 		);
-		let operationId: string | null = null;
+		let operationId: Id<'operations'> | null = null;
 		if (actionId) {
 			const snapshot = await ctx.db
 				.query('walletActionSnapshots')
 				.withIndex('by_privy_id', (q) => q.eq('privyWalletActionId', actionId))
 				.first();
-			operationId = snapshot?._id ? String(snapshot.operationId) : null;
+			operationId = snapshot?.operationId ?? null;
 		}
 		if (!operationId && intentId) {
 			const snapshot = await ctx.db
 				.query('intentSnapshots')
 				.withIndex('by_privy_id', (q) => q.eq('privyIntentId', intentId))
 				.first();
-			operationId = snapshot?._id ? String(snapshot.operationId) : null;
+			operationId = snapshot?.operationId ?? null;
 		}
 		if (operationId)
 			await ctx.scheduler.runAfter(0, internal.operationState.applyProviderState, {

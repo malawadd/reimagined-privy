@@ -10,16 +10,38 @@ export const provisionWallet = internalAction({
 		organizationId: v.id('organizations'),
 		name: v.string(),
 		ownerQuorumId: v.string(),
+		ownerPolicyId: v.string(),
+		automationSignerId: v.optional(v.string()),
+		automationPolicyId: v.optional(v.string()),
 		correlationId: v.string(),
 		actorId: v.string()
 	},
-	handler: async (ctx, args) => {
+	returns: v.any(),
+	handler: async (ctx, args): Promise<unknown> => {
 		const provider = await createPrivyGateway().provisionTreasury({
 			ownerId: args.ownerQuorumId,
 			name: args.name,
+			ownerPolicyId: args.ownerPolicyId,
+			automationSigner:
+				args.automationSignerId && args.automationPolicyId
+					? {
+							signerId: args.automationSignerId,
+							overridePolicyId: args.automationPolicyId
+						}
+					: undefined,
 			idempotencyKey: args.correlationId
 		});
-		return ctx.runMutation(internal.operationState.saveWallet, { ...args, provider });
+		return ctx.runMutation(internal.operationState.saveWallet, {
+			organizationId: args.organizationId,
+			name: args.name,
+			ownerQuorumId: args.ownerQuorumId,
+			ownerPolicyId: args.ownerPolicyId,
+			automationSignerId: args.automationSignerId,
+			automationPolicyId: args.automationPolicyId,
+			correlationId: args.correlationId,
+			actorId: args.actorId,
+			provider
+		});
 	}
 });
 export const createPolicy = internalAction({
@@ -27,15 +49,25 @@ export const createPolicy = internalAction({
 		organizationId: v.id('organizations'),
 		name: v.string(),
 		json: v.any(),
+		ownerQuorumId: v.string(),
 		correlationId: v.string(),
 		actorId: v.string()
 	},
-	handler: async (ctx, args) => {
+	returns: v.any(),
+	handler: async (ctx, args): Promise<unknown> => {
 		const provider = await createPrivyGateway().createPolicy({
 			...(args.json as object),
+			owner_id: args.ownerQuorumId,
 			idempotency_key: args.correlationId
 		});
-		return ctx.runMutation(internal.operationState.savePolicy, { ...args, provider });
+		return ctx.runMutation(internal.operationState.savePolicy, {
+			organizationId: args.organizationId,
+			name: args.name,
+			json: args.json,
+			correlationId: args.correlationId,
+			actorId: args.actorId,
+			provider
+		});
 	}
 });
 export const requestWalletUpdate = internalAction({

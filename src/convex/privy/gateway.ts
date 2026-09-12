@@ -1,16 +1,19 @@
 'use node';
 
-import { PrivyClient } from '@privy-io/node';
+import { generateAuthorizationSignature, PrivyClient } from '@privy-io/node';
 import { BASE_SEPOLIA } from '../../lib/domain';
 
 export interface PrivyGateway {
 	provisionTreasury(input: {
 		ownerId: string;
 		name: string;
+		ownerPolicyId: string;
+		automationSigner?: { signerId: string; overridePolicyId: string };
 		idempotencyKey: string;
 	}): Promise<unknown>;
 	listWallets(): Promise<unknown[]>;
 	getWallet(walletId: string): Promise<unknown>;
+	getPolicy(policyId: string): Promise<unknown>;
 	createPolicy(input: Record<string, unknown> & { idempotency_key: string }): Promise<unknown>;
 	transfer(input: {
 		walletId: string;
@@ -35,15 +38,36 @@ export interface PrivyGateway {
 
 export class LivePrivyGateway implements PrivyGateway {
 	private client: PrivyClient;
+	private appId: string;
 
 	constructor(appId: string, appSecret: string) {
-		this.client = new PrivyClient({ appId, appSecret });
+		this.appId = appId;
+		this.client = new PrivyClient({
+			appId,
+			appSecret,
+			requestExpiry: { defaultMs: 15 * 60 * 1000, defaultIntentMs: 71 * 60 * 60 * 1000 }
+		});
 	}
 
-	async provisionTreasury(input: { ownerId: string; name: string; idempotencyKey: string }) {
+	async provisionTreasury(input: {
+		ownerId: string;
+		name: string;
+		ownerPolicyId: string;
+		automationSigner?: { signerId: string; overridePolicyId: string };
+		idempotencyKey: string;
+	}) {
 		return this.client.wallets().create({
 			chain_type: 'ethereum',
 			owner_id: input.ownerId,
+			policy_ids: [input.ownerPolicyId],
+			additional_signers: input.automationSigner
+				? [
+						{
+							signer_id: input.automationSigner.signerId,
+							override_policy_ids: [input.automationSigner.overridePolicyId]
+						}
+					]
+				: undefined,
 			idempotency_key: input.idempotencyKey,
 			display_name: input.name
 		});
@@ -59,6 +83,10 @@ export class LivePrivyGateway implements PrivyGateway {
 		return this.client.wallets().get(walletId);
 	}
 
+	getPolicy(policyId: string) {
+		return this.client.policies().get(policyId);
+	}
+
 	createPolicy(input: Record<string, unknown> & { idempotency_key: string }) {
 		return this.client.policies().create(input as never);
 	}
@@ -71,12 +99,34 @@ export class LivePrivyGateway implements PrivyGateway {
 		idempotencyKey: string;
 		authorizationPrivateKey: string;
 	}) {
-		return this.client.wallets().transfer(input.walletId, {
-			amount: input.amount,
-			source: { asset: input.asset.toLowerCase(), chain: BASE_SEPOLIA.transferChain },
-			destination: { address: input.destination },
-			authorization_context: { authorization_private_keys: [input.authorizationPrivateKey] },
-			idempotency_key: input.idempotencyKey
+		const body = {
+			source: {
+				asset: input.asset.toLowerCase(),
+				amount: input.amount,
+				chain: BASE_SEPOLIA.transferChain
+			},
+			destination: { address: input.destination }
+		};
+		const requestExpiry = Date.now() + 15 * 60 * 1000;
+		const signature = generateAuthorizationSignature({
+			authorizationPrivateKey: input.authorizationPrivateKey,
+			input: {
+				version: 1,
+				method: 'POST',
+				url: `https://api.privy.io/v1/wallets/${input.walletId}/transfer`,
+				headers: {
+					'privy-app-id': this.appId,
+					'privy-idempotency-key': input.idempotencyKey,
+					'privy-request-expiry': String(requestExpiry)
+				},
+				body
+			}
+		});
+		return this.client.wallets()._transfer(input.walletId, {
+			...body,
+			'privy-authorization-signature': signature,
+			'privy-idempotency-key': input.idempotencyKey,
+			'privy-request-expiry': String(requestExpiry)
 		} as never);
 	}
 
@@ -87,8 +137,11 @@ export class LivePrivyGateway implements PrivyGateway {
 		destination: string;
 	}) {
 		return this.client.intents().transfer(input.walletId, {
-			amount: input.amount,
-			source: { asset: input.asset.toLowerCase(), chain: BASE_SEPOLIA.transferChain },
+			source: {
+				asset: input.asset.toLowerCase(),
+				amount: input.amount,
+				chain: BASE_SEPOLIA.transferChain
+			},
 			destination: { address: input.destination }
 		} as never);
 	}
@@ -135,6 +188,9 @@ class MockPrivyGateway implements PrivyGateway {
 	}
 	getWallet(walletId: string) {
 		return Promise.resolve({ ...this.result('wallet', 'active'), id: walletId });
+	}
+	getPolicy(policyId: string) {
+		return Promise.resolve({ ...this.result('policy', 'active'), id: policyId });
 	}
 	createPolicy() {
 		return Promise.resolve(this.result('policy', 'active'));

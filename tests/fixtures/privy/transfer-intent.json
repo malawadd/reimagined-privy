@@ -1,7 +1,16 @@
 {
-	"id": "intent_sanitized_01",
-	"type": "TRANSFER",
+	"intent_id": "intent_sanitized_01",
+	"intent_type": "TRANSFER",
 	"status": "pending",
-	"authorization": { "required": 2, "approved": 1 },
+	"authorization_details": [
+		{
+			"threshold": 2,
+			"members": [
+				{ "type": "user", "user_id": "did:privy:reviewer-1", "signed_at": 1789235000 },
+				{ "type": "user", "user_id": "did:privy:reviewer-2", "signed_at": null },
+				{ "type": "user", "user_id": "did:privy:reviewer-3", "signed_at": null }
+			]
+		}
+	],
 	"expires_at": 1789236000
 }

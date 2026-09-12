@@ -58,6 +58,16 @@ describe('control routing and operation state', () => {
 			}).path
 		).toBe('privyIntent');
 	});
+	it('blocks zero-value transfers before selecting a Privy path', () => {
+		expect(
+			selectPaymentRoute({
+				asset: 'USDC',
+				amount: '0',
+				destination: '0x1',
+				recipientApproved: true
+			}).path
+		).toBe('blocked');
+	});
 	it('only permits declared transitions', () => {
 		expect(canTransition('draft', 'queued')).toBe(true);
 		expect(canTransition('succeeded', 'executing')).toBe(false);

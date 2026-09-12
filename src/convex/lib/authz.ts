@@ -1,16 +1,9 @@
-import type {
-	GenericMutationCtx,
-	GenericQueryCtx,
-	GenericActionCtx,
-	GenericDataModel
-} from 'convex/server';
+import type { GenericMutationCtx, GenericQueryCtx, GenericActionCtx } from 'convex/server';
+import type { DataModel, Id } from '../_generated/dataModel';
 import type { OrgRole } from '../../lib/domain';
 import { can, type Capability } from '../../lib/rbac';
 
-type Ctx =
-	| GenericQueryCtx<GenericDataModel>
-	| GenericMutationCtx<GenericDataModel>
-	| GenericActionCtx<GenericDataModel>;
+type Ctx = GenericQueryCtx<DataModel> | GenericMutationCtx<DataModel> | GenericActionCtx<DataModel>;
 
 export async function requireIdentity(ctx: Ctx) {
 	const identity = await ctx.auth.getUserIdentity();
@@ -19,8 +12,8 @@ export async function requireIdentity(ctx: Ctx) {
 }
 
 export async function requireMembership(
-	ctx: GenericQueryCtx<GenericDataModel> | GenericMutationCtx<GenericDataModel>,
-	organizationId: string,
+	ctx: GenericQueryCtx<DataModel> | GenericMutationCtx<DataModel>,
+	organizationId: Id<'organizations'>,
 	capability?: Capability
 ) {
 	const identity = await requireIdentity(ctx);
@@ -31,9 +24,7 @@ export async function requireMembership(
 	if (!user) throw new Error('User has not been synchronized.');
 	const membership = await ctx.db
 		.query('memberships')
-		.filter((q) =>
-			q.and(q.eq(q.field('organizationId'), organizationId), q.eq(q.field('userId'), user._id))
-		)
+		.withIndex('by_org_user', (q) => q.eq('organizationId', organizationId).eq('userId', user._id))
 		.unique();
 	if (!membership || membership.status !== 'active') throw new Error('Organization access denied.');
 	if (capability && !can(membership.role as OrgRole, capability))
@@ -41,9 +32,9 @@ export async function requireMembership(
 	return { identity, user, membership };
 }
 
-export function assertOrgScoped<T extends { organizationId: string }>(
+export function assertOrgScoped<T extends { organizationId: Id<'organizations'> }>(
 	record: T | null,
-	organizationId: string
+	organizationId: Id<'organizations'>
 ): asserts record is T {
 	if (!record || record.organizationId !== organizationId) throw new Error('Resource not found.');
 }

@@ -4,7 +4,21 @@ import { v } from 'convex/values';
 import { Webhook } from 'svix';
 import { internalAction } from './_generated/server';
 import { internal } from './_generated/api';
+import type { Id } from './_generated/dataModel';
 import { privyWebhookEnvelope } from './privy/events';
+
+export function verifyPrivyWebhookPayload(
+	rawBody: string,
+	headers: { svixId: string; svixTimestamp: string; svixSignature: string },
+	signingKey: string
+) {
+	new Webhook(signingKey).verify(rawBody, {
+		'svix-id': headers.svixId,
+		'svix-timestamp': headers.svixTimestamp,
+		'svix-signature': headers.svixSignature
+	});
+	return privyWebhookEnvelope.parse(JSON.parse(rawBody));
+}
 
 export const verifyAndStore = internalAction({
 	args: {
@@ -13,15 +27,14 @@ export const verifyAndStore = internalAction({
 		svixTimestamp: v.string(),
 		svixSignature: v.string()
 	},
-	handler: async (ctx, args) => {
+	returns: v.object({ duplicate: v.boolean(), receiptId: v.id('webhookReceipts') }),
+	handler: async (ctx, args): Promise<{ duplicate: boolean; receiptId: Id<'webhookReceipts'> }> => {
 		const signingKey = process.env.PRIVY_WEBHOOK_SIGNING_KEY;
 		if (!signingKey) throw new Error('Webhook signing key is not configured.');
-		const verified = new Webhook(signingKey).verify(args.rawBody, {
-			'svix-id': args.svixId,
-			'svix-timestamp': args.svixTimestamp,
-			'svix-signature': args.svixSignature
-		});
-		const payload = privyWebhookEnvelope.parse(verified) as Record<string, unknown>;
+		const payload = verifyPrivyWebhookPayload(args.rawBody, args, signingKey) as Record<
+			string,
+			unknown
+		>;
 		return ctx.runMutation(internal.webhookProcessing.insertReceipt, {
 			svixMessageId: args.svixId,
 			eventType: String(payload.type ?? 'unknown'),

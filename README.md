@@ -7,12 +7,14 @@ An opinionated SvelteKit + Convex reference application for controlled B2B crypt
 Requirements: Node 22 and pnpm.
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 pnpm install
+pnpm keys:generate
+pnpm convex:env:local
 pnpm dev
 ```
 
-The example defaults to `PUBLIC_PRIVY_MODE=mock`. Sign in with any email and OTP `123456`, or choose Google. Mock mode exists for UI development and tests only.
+The checked-in workspace is configured for a local Convex deployment at `127.0.0.1:3210` and defaults to `PUBLIC_PRIVY_MODE=mock`. Sign in with any email and OTP `123456`, or choose Google. Mock mode exists for local development and tests only. `pnpm dev` keeps both Convex and Vite running; use `pnpm dev:ui` only when Convex is already running elsewhere.
 
 For the backend, create a Convex project, set `PUBLIC_CONVEX_URL` and `PUBLIC_CONVEX_SITE_URL`, then run `pnpm convex:dev`. Generate the custom-JWT RSA material with `pnpm keys:generate` and move the private PEM into Convex environment variables immediately.
 
@@ -32,7 +34,8 @@ For the backend, create a Convex project, set `PUBLIC_CONVEX_URL` and `PUBLIC_CO
 
 | Command                 | Purpose                                                             |
 | ----------------------- | ------------------------------------------------------------------- |
-| `pnpm dev`              | Local UI with mock or live configuration                            |
+| `pnpm dev`              | Run the selected Convex deployment and Vite together                |
+| `pnpm dev:ui`           | Run only Vite                                                       |
 | `pnpm convex:dev`       | Generate Convex bindings and run the backend                        |
 | `pnpm check`            | Svelte and TypeScript validation                                    |
 | `pnpm lint`             | Prettier and ESLint checks                                          |
@@ -42,6 +45,8 @@ For the backend, create a Convex project, set `PUBLIC_CONVEX_URL` and `PUBLIC_CO
 | `pnpm build:production` | Deployment build; fails unless live public configuration is present |
 
 Read [architecture](docs/architecture.md), [security](docs/security.md), [setup](docs/setup.md), [deployment](docs/deployment.md), [demo script](docs/demo-script.md), [troubleshooting](docs/troubleshooting.md), and [extensions](docs/extensions.md).
+
+Privy Dashboard locations and safe secret-loading commands are listed in [credentials](docs/credentials.md).
 
 ## Scope
 
