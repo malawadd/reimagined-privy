@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
-import { requireMembership, assertOrgScoped } from './lib/authz';
+import { requireMembership, assertOrgScoped, requireWalletPermission } from './lib/authz';
 import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../lib/domain';
 import { internal } from './_generated/api';
 import { appendAudit } from './lib/audit';
@@ -27,9 +27,13 @@ export const createPayment = mutation({
 		deduplicated: v.boolean()
 	}),
 	handler: async (ctx, args) => {
-		const { user } = await requireMembership(ctx, args.organizationId, 'payment:create');
-		const wallet = await ctx.db.get(args.walletId);
-		assertOrgScoped(wallet, args.organizationId);
+		const { user, wallet } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			args.walletId,
+			'initiate',
+			'payment:create'
+		);
 		const destination = normalizeEvmAddress(args.destination);
 		const amount = normalizeDecimal(args.amount, args.asset === 'USDC' ? 6 : 18);
 		const reference = args.reference.trim();

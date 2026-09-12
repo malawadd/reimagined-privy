@@ -1,7 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { internal } from './_generated/api';
-import { assertOrgScoped, requireMembership } from './lib/authz';
+import { assertOrgScoped, requireMembership, requireWalletPermission } from './lib/authz';
 import {
 	decimalToUnits,
 	normalizeDecimal,
@@ -9,6 +9,7 @@ import {
 	selectPaymentRoute
 } from '../lib/domain';
 import { appendAudit } from './lib/audit';
+import { resolvePayrollDestination } from '../lib/wallet-controls';
 
 const batchStatus = v.union(
 	v.literal('queued'),
@@ -92,9 +93,13 @@ export const createAndQueue = mutation({
 	},
 	returns: v.object({ batchId: v.id('paymentBatches'), operationIds: v.array(v.id('operations')) }),
 	handler: async (ctx, args) => {
-		const { user } = await requireMembership(ctx, args.organizationId, 'batch:manage');
-		const wallet = await ctx.db.get(args.sourceWalletId);
-		assertOrgScoped(wallet, args.organizationId);
+		const { user, wallet } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			args.sourceWalletId,
+			'initiate',
+			'batch:manage'
+		);
 		if (wallet.purpose === 'collection') throw new Error('Batches must use a treasury wallet.');
 		const name = args.name.trim();
 		if (!name || name.length > 100) throw new Error('Batch name must be 1 to 100 characters.');
@@ -198,6 +203,158 @@ export const createAndQueue = mutation({
 				totalAmount: unitsToDecimal(totalUnits.toString(), 6),
 				operationIds
 			}
+		});
+		return { batchId, operationIds };
+	}
+});
+
+export const createPayroll = mutation({
+	args: {
+		organizationId: v.id('organizations'),
+		name: v.string(),
+		sourceWalletId: v.id('wallets'),
+		items: v.array(
+			v.object({ userId: v.id('users'), amount: v.string(), memo: v.optional(v.string()) })
+		)
+	},
+	returns: v.object({ batchId: v.id('paymentBatches'), operationIds: v.array(v.id('operations')) }),
+	handler: async (ctx, args) => {
+		const { user, wallet } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			args.sourceWalletId,
+			'initiate',
+			'batch:manage'
+		);
+		if (wallet.purpose === 'collection') throw new Error('Payroll must use a treasury wallet.');
+		const name = args.name.trim();
+		if (!name || name.length > 100) throw new Error('Payroll name must be 1 to 100 characters.');
+		if (args.items.length < 1 || args.items.length > 100)
+			throw new Error('Payroll must contain 1 to 100 members.');
+		const prepared: Array<{
+			userId: (typeof args.items)[number]['userId'];
+			label: string;
+			destination: string;
+			amount: string;
+			memo?: string;
+			path: 'automationSigner' | 'privyIntent';
+		}> = [];
+		let totalUnits = 0n;
+		for (const input of args.items) {
+			const membership = await ctx.db
+				.query('memberships')
+				.withIndex('by_org_user', (q) =>
+					q.eq('organizationId', args.organizationId).eq('userId', input.userId)
+				)
+				.unique();
+			if (!membership || membership.status !== 'active')
+				throw new Error('Payroll member is not active.');
+			const [profile, memberUser] = await Promise.all([
+				ctx.db
+					.query('payrollProfiles')
+					.withIndex('by_org_user', (q) =>
+						q.eq('organizationId', args.organizationId).eq('userId', input.userId)
+					)
+					.unique(),
+				ctx.db.get(input.userId)
+			]);
+			if (!profile)
+				throw new Error(
+					`${memberUser?.name ?? memberUser?.email ?? 'Member'} has no payroll profile.`
+				);
+			let personalAddress: string | undefined;
+			if (profile.destinationKind === 'personal' && profile.personalWalletId) {
+				const personal = await ctx.db.get(profile.personalWalletId);
+				assertOrgScoped(personal, args.organizationId);
+				if (personal.userId !== input.userId)
+					throw new Error('Personal wallet ownership mismatch.');
+				personalAddress = personal.address;
+			}
+			const destination = resolvePayrollDestination({
+				eligibility: profile.eligibility,
+				destinationKind: profile.destinationKind,
+				personalAddress,
+				externalAddress: profile.externalAddress,
+				externalVerifiedAt: profile.externalVerifiedAt
+			});
+			const amount = normalizeDecimal(input.amount, 6);
+			if (amount === '0') throw new Error('Payroll amounts must be greater than zero.');
+			const decision = selectPaymentRoute({
+				asset: 'USDC',
+				amount,
+				destination,
+				recipientApproved: true
+			});
+			if (decision.path === 'blocked') throw new Error('A payroll payment is blocked by policy.');
+			totalUnits += decimalToUnits(amount, 6);
+			prepared.push({
+				userId: input.userId,
+				label: memberUser?.name ?? memberUser?.email ?? 'Member',
+				destination,
+				amount,
+				memo: input.memo?.trim() || undefined,
+				path: decision.path as 'automationSigner' | 'privyIntent'
+			});
+		}
+		const now = Date.now();
+		const totalAmount = unitsToDecimal(totalUnits.toString(), 6);
+		const batchId = await ctx.db.insert('paymentBatches', {
+			organizationId: args.organizationId,
+			type: 'payroll',
+			name,
+			asset: 'USDC',
+			totalAmount,
+			itemCount: prepared.length,
+			status: 'processing',
+			sourceWalletId: wallet._id,
+			createdBy: user._id,
+			createdAt: now,
+			updatedAt: now
+		});
+		const operationIds = [];
+		for (const [index, item] of prepared.entries()) {
+			const requestKey = `payroll:${batchId}:${index}`;
+			const itemId = await ctx.db.insert('paymentBatchItems', {
+				organizationId: args.organizationId,
+				batchId,
+				label: item.label,
+				destination: item.destination,
+				amount: item.amount,
+				memo: item.memo,
+				status: 'queued',
+				requestKey
+			});
+			const operationId = await ctx.db.insert('operations', {
+				organizationId: args.organizationId,
+				kind: 'payment',
+				status: 'queued',
+				approvalPath: item.path,
+				asset: 'USDC',
+				amount: item.amount,
+				destination: item.destination,
+				memo: item.memo,
+				reference: `${name} · ${item.label}`,
+				requestKey,
+				createdBy: user._id,
+				sourceWalletId: wallet._id,
+				sourceBatchItemId: itemId,
+				correlationId: `payment:${args.organizationId}:${requestKey}`,
+				createdAt: now,
+				updatedAt: now
+			});
+			await ctx.db.patch(itemId, { operationId });
+			operationIds.push(operationId);
+			await ctx.scheduler.runAfter(0, internal.privyActions.executePayment, { operationId });
+		}
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: 'payroll.queued',
+			resourceType: 'paymentBatch',
+			resourceId: batchId,
+			correlationId: `batch:${batchId}`,
+			metadata: { itemCount: prepared.length, totalAmount, operationIds }
 		});
 		return { batchId, operationIds };
 	}

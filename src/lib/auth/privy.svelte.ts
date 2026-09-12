@@ -1,6 +1,12 @@
 import { browser } from '$app/environment';
 import { env } from '$env/dynamic/public';
-import Privy, { LocalStorage } from '@privy-io/js-sdk-core';
+import Privy, {
+	LocalStorage,
+	generateAuthorizationSignature,
+	getAllUserEmbeddedEthereumWallets,
+	getEntropyDetailsFromUser
+} from '@privy-io/js-sdk-core';
+import { privyIntentSignaturePayload } from '$lib/wallet-controls';
 
 export interface ConsoleUser {
 	id: string;
@@ -16,6 +22,7 @@ class PrivyAuthStore {
 	codeSent = $state(false);
 	private client: Privy | null = null;
 	private iframe: HTMLIFrameElement | null = null;
+	private rawUser: unknown = null;
 
 	async initialize() {
 		if (!browser || this.ready) return;
@@ -51,6 +58,7 @@ class PrivyAuthStore {
 			await this.client.initialize();
 			try {
 				const session = await this.client.user.get();
+				this.rawUser = session.user;
 				this.user = toConsoleUser(session.user);
 			} catch {
 				this.user = null;
@@ -81,6 +89,7 @@ class PrivyAuthStore {
 		try {
 			if (!this.client) throw new Error('Privy is not initialized.');
 			const result = await this.client!.auth.email.loginWithCode(email, code);
+			this.rawUser = result.user;
 			this.user = toConsoleUser(result.user);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : 'Unable to sign in.';
@@ -104,6 +113,7 @@ class PrivyAuthStore {
 		const state = params.get('privy_oauth_state');
 		if (!code || !state) throw new Error('Privy OAuth callback parameters are missing.');
 		const result = await this.client.auth.oauth.loginWithCode(code, state, 'google');
+		this.rawUser = result.user;
 		this.user = toConsoleUser(result.user);
 		return this.user;
 	}
@@ -112,9 +122,72 @@ class PrivyAuthStore {
 		return this.client?.getAccessToken() ?? null;
 	}
 
+	async authorizeIntent(input: {
+		organizationId: string;
+		intentId: string;
+		expiresAt?: number | null;
+		requestDetails: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; url: string; body?: unknown };
+	}) {
+		if (!this.client) throw new Error('Privy is not initialized.');
+		const timestamp = Date.now();
+		const { signature } = await generateAuthorizationSignature(
+			this.client.embeddedWallet.signWithUserSigner.bind(this.client.embeddedWallet),
+			privyIntentSignaturePayload({
+				appId: env.PUBLIC_PRIVY_APP_ID,
+				intentId: input.intentId,
+				timestamp,
+				expiresAt: input.expiresAt,
+				request: input.requestDetails
+			})
+		);
+		const accessToken = await this.getAccessToken();
+		if (!accessToken) throw new Error('Your Privy session has expired.');
+		const response = await fetch('/api/intents/authorize', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ ...input, requestDetails: undefined, signature, timestamp })
+		});
+		if (!response.ok)
+			throw new Error('Privy could not accept this approval. Refresh and try again.');
+	}
+
+	async ensurePersonalWallet(excludedWalletIds: string[]) {
+		if (!this.client || !this.rawUser) throw new Error('Privy is not initialized.');
+		const excluded = new Set(excludedWalletIds);
+		let accounts = getAllUserEmbeddedEthereumWallets(this.rawUser as never);
+		let wallet = accounts.find((account) => !excluded.has(String(account.id)));
+		if (!wallet) {
+			if (accounts.length === 0) {
+				this.rawUser = await this.client.embeddedWallet.create({
+					idempotencyKey: crypto.randomUUID()
+				});
+			} else {
+				const entropy = getEntropyDetailsFromUser(this.rawUser as never, accounts[0]);
+				if (!entropy) throw new Error('Privy could not resolve the member wallet key.');
+				const nextIndex =
+					Math.max(
+						...accounts.map((account) =>
+							Number.isInteger(account.wallet_index) ? Number(account.wallet_index) : 0
+						)
+					) + 1;
+				const added = await this.client.embeddedWallet.add({
+					chainType: 'ethereum',
+					hdWalletIndex: nextIndex,
+					...entropy
+				});
+				this.rawUser = added.user;
+			}
+			accounts = getAllUserEmbeddedEthereumWallets(this.rawUser as never);
+			wallet = accounts.find((account) => !excluded.has(String(account.id)));
+		}
+		if (!wallet) throw new Error('Privy did not return an Ethereum wallet.');
+		return { id: wallet.id, address: wallet.address };
+	}
+
 	async logout() {
 		await this.client?.auth.logout({ userId: this.user?.id });
 		this.user = null;
+		this.rawUser = null;
 		this.codeSent = false;
 	}
 }

@@ -15,6 +15,7 @@ export const operationKinds = [
 	'payment',
 	'treasuryTransfer',
 	'walletUpdate',
+	'quorumUpdate',
 	'policyUpdate',
 	'automationRun'
 ] as const;

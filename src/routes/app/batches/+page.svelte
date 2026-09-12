@@ -17,7 +17,11 @@
 	const wallets = useQuery(api.wallets.list, () =>
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
+	const payrollProfiles = useQuery(api.payroll.listProfiles, () =>
+		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
+	);
 	const createBatch = useMutation(api.batches.createAndQueue);
+	const createPayroll = useMutation(api.batches.createPayroll);
 	let tab = $state<'batch' | 'payroll'>('batch');
 	let creating = $state(false);
 	let name = $state('');
@@ -69,18 +73,31 @@
 		submitting = true;
 		error = null;
 		try {
-			await createBatch({
-				organizationId: workspace.activeOrganizationId,
-				type: tab,
-				name,
-				sourceWalletId: sourceWalletId as Id<'wallets'>,
-				items: items.map((item) => ({
-					label: item.label,
-					recipientId: item.recipientId as Id<'recipients'>,
-					amount: item.amount,
-					memo: item.memo || undefined
-				}))
-			});
+			if (tab === 'payroll') {
+				await createPayroll({
+					organizationId: workspace.activeOrganizationId,
+					name,
+					sourceWalletId: sourceWalletId as Id<'wallets'>,
+					items: items.map((item) => ({
+						userId: item.recipientId as Id<'users'>,
+						amount: item.amount,
+						memo: item.memo || undefined
+					}))
+				});
+			} else {
+				await createBatch({
+					organizationId: workspace.activeOrganizationId,
+					type: 'batch',
+					name,
+					sourceWalletId: sourceWalletId as Id<'wallets'>,
+					items: items.map((item) => ({
+						label: item.label,
+						recipientId: item.recipientId as Id<'recipients'>,
+						amount: item.amount,
+						memo: item.memo || undefined
+					}))
+				});
+			}
 			creating = false;
 			name = '';
 			items = [{ label: '', recipientId: '', amount: '', memo: '' }];
@@ -125,7 +142,11 @@
 			{batches.error.message}
 		</div>{:else if filtered.length === 0}<div class="batch-empty">
 			<Layers3 size={27} /><strong>No {tab === 'batch' ? 'batches' : 'payroll runs'} queued</strong
-			><span>Create a run from approved USDC counterparties.</span>
+			><span
+				>{tab === 'payroll'
+					? 'Members configure and verify their own salary destination.'
+					: 'Create a run from approved USDC counterparties.'}</span
+			>
 		</div>{:else}<div class="batch-list">
 			{#each filtered as row}<article>
 					<div>
@@ -198,10 +219,13 @@
 								value={item.recipientId}
 								onchange={(event) => updateItem(index, 'recipientId', event.currentTarget.value)}
 								required
-								><option value="">Approved recipient</option
-								>{#each (recipients.data ?? []).filter((entry) => entry.status === 'approved' && entry.assets.includes('USDC')) as recipient}<option
-										value={recipient._id}>{recipient.label}</option
-									>{/each}</select
+								><option value=""
+									>{tab === 'payroll' ? 'Payroll member' : 'Approved recipient'}</option
+								>{#if tab === 'payroll'}{#each (payrollProfiles.data ?? []).filter((entry) => entry.membershipStatus === 'active' && entry.profile?.eligibility === 'active' && entry.profile?.destinationKind) as entry}{#if entry.user}<option
+												value={entry.user._id}>{entry.user.name ?? entry.user.email}</option
+											>{/if}{/each}{:else}{#each (recipients.data ?? []).filter((entry) => entry.status === 'approved' && entry.assets.includes('USDC')) as recipient}<option
+											value={recipient._id}>{recipient.label}</option
+										>{/each}{/if}</select
 							><input
 								aria-label={`Payment ${index + 1} label`}
 								value={item.label}

@@ -8,8 +8,11 @@ const modules = import.meta.glob('../src/convex/**/*.ts');
 describe('Convex tenant authorization', () => {
 	it('uses the operation source wallet and refuses to cancel dispatched payments', async () => {
 		const t = convexTest(schema, modules);
-		const owner = t.withIdentity({ subject: 'did:privy:wallet-owner' });
-		const userId = await owner.mutation(api.users.syncCurrent, { email: 'wallet@example.com' });
+		const owner = t.withIdentity({
+			subject: 'did:privy:wallet-owner',
+			email: 'wallet@example.com'
+		});
+		const userId = await owner.mutation(api.users.syncCurrent, {});
 		const ids = await t.run(async (ctx) => {
 			const organizationId = await ctx.db.insert('organizations', {
 				name: 'Wallet Co',
@@ -82,8 +85,8 @@ describe('Convex tenant authorization', () => {
 
 	it('denies a valid user who is not a member of the organization', async () => {
 		const t = convexTest(schema, modules);
-		const owner = t.withIdentity({ subject: 'did:privy:owner' });
-		const userId = await owner.mutation(api.users.syncCurrent, { email: 'owner@example.com' });
+		const owner = t.withIdentity({ subject: 'did:privy:owner', email: 'owner@example.com' });
+		const userId = await owner.mutation(api.users.syncCurrent, {});
 		const organizationId = await t.run(async (ctx) => {
 			const organizationId = await ctx.db.insert('organizations', {
 				name: 'Owner company',
@@ -100,8 +103,11 @@ describe('Convex tenant authorization', () => {
 			return organizationId;
 		});
 
-		const outsider = t.withIdentity({ subject: 'did:privy:outsider' });
-		await outsider.mutation(api.users.syncCurrent, { email: 'outsider@example.com' });
+		const outsider = t.withIdentity({
+			subject: 'did:privy:outsider',
+			email: 'outsider@example.com'
+		});
+		await outsider.mutation(api.users.syncCurrent, {});
 		await expect(outsider.query(api.organizations.getActive, { organizationId })).rejects.toThrow(
 			'Organization access denied'
 		);
@@ -278,5 +284,158 @@ describe('Convex tenant authorization', () => {
 			rawAmount: '12500000',
 			transactionHash: '0xabc'
 		});
+	});
+
+	it('accepts an invitation only for the server-verified Privy email', async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity({ subject: 'did:privy:invite-owner', email: 'owner@example.com' });
+		const invitee = t.withIdentity({ subject: 'did:privy:invitee', email: 'Invitee@Example.com' });
+		const wrongUser = t.withIdentity({ subject: 'did:privy:wrong', email: 'wrong@example.com' });
+		const ownerId = await owner.mutation(api.users.syncCurrent, {});
+		await invitee.mutation(api.users.syncCurrent, {});
+		await wrongUser.mutation(api.users.syncCurrent, {});
+		const organizationId = await t.run(async (ctx) => {
+			const organizationId = await ctx.db.insert('organizations', {
+				name: 'Invite Co',
+				slug: 'invite-co',
+				createdByUserId: ownerId,
+				active: true
+			});
+			await ctx.db.insert('memberships', {
+				organizationId,
+				userId: ownerId,
+				role: 'owner',
+				status: 'active'
+			});
+			return organizationId;
+		});
+		const invitationId = await owner.mutation(api.members.invite, {
+			organizationId,
+			email: '  INVITEE@example.com ',
+			role: 'operator',
+			walletGrants: []
+		});
+		await expect(
+			wrongUser.mutation(api.members.acceptInvitation, { invitationId })
+		).rejects.toThrow('different verified email');
+		const pending = await invitee.query(api.members.pendingForCurrent, {});
+		expect(pending).toHaveLength(1);
+		await invitee.mutation(api.members.acceptInvitation, { invitationId });
+		const rows = await owner.query(api.members.list, { organizationId });
+		expect(rows).toHaveLength(2);
+		expect(rows.find((row) => row.user.privyDid === 'did:privy:invitee')).toMatchObject({
+			role: 'operator',
+			status: 'active'
+		});
+	});
+
+	it('prevents demoting or suspending the last active owner', async () => {
+		const t = convexTest(schema, modules);
+		const owner = t.withIdentity({ subject: 'did:privy:last-owner', email: 'last@example.com' });
+		const userId = await owner.mutation(api.users.syncCurrent, {});
+		const ids = await t.run(async (ctx) => {
+			const organizationId = await ctx.db.insert('organizations', {
+				name: 'Owner Guard',
+				slug: 'owner-guard',
+				createdByUserId: userId,
+				active: true
+			});
+			const membershipId = await ctx.db.insert('memberships', {
+				organizationId,
+				userId,
+				role: 'owner',
+				status: 'active'
+			});
+			return { organizationId, membershipId };
+		});
+		await expect(owner.mutation(api.members.changeRole, { ...ids, role: 'admin' })).rejects.toThrow(
+			'at least one active owner'
+		);
+		await expect(owner.mutation(api.members.suspend, ids)).rejects.toThrow(
+			'at least one active owner'
+		);
+	});
+
+	it('limits non-owner wallet visibility to active view assignments', async () => {
+		const t = convexTest(schema, modules);
+		const operator = t.withIdentity({
+			subject: 'did:privy:assigned-operator',
+			email: 'operator@example.com'
+		});
+		const ids = await t.run(async (ctx) => {
+			const ownerId = await ctx.db.insert('users', {
+				privyDid: 'did:privy:scope-owner',
+				email: 'owner@example.com',
+				lastSeenAt: Date.now()
+			});
+			const operatorId = await ctx.db.insert('users', {
+				privyDid: 'did:privy:assigned-operator',
+				email: 'operator@example.com',
+				lastSeenAt: Date.now()
+			});
+			const organizationId = await ctx.db.insert('organizations', {
+				name: 'Wallet Scope',
+				slug: 'wallet-scope',
+				createdByUserId: ownerId,
+				active: true
+			});
+			await ctx.db.insert('memberships', {
+				organizationId,
+				userId: ownerId,
+				role: 'owner',
+				status: 'active'
+			});
+			await ctx.db.insert('memberships', {
+				organizationId,
+				userId: operatorId,
+				role: 'operator',
+				status: 'active'
+			});
+			const visibleWalletId = await ctx.db.insert('wallets', {
+				organizationId,
+				privyWalletId: 'wallet_visible',
+				name: 'Visible',
+				address: '0x0000000000000000000000000000000000000001',
+				chainType: 'ethereum',
+				chainId: 84532,
+				ownerQuorumId: 'quorum',
+				signerIds: [],
+				policyIds: [],
+				syncVersion: 1,
+				syncedAt: Date.now()
+			});
+			const hiddenWalletId = await ctx.db.insert('wallets', {
+				organizationId,
+				privyWalletId: 'wallet_hidden',
+				name: 'Hidden',
+				address: '0x0000000000000000000000000000000000000002',
+				chainType: 'ethereum',
+				chainId: 84532,
+				ownerQuorumId: 'quorum',
+				signerIds: [],
+				policyIds: [],
+				syncVersion: 1,
+				syncedAt: Date.now()
+			});
+			await ctx.db.insert('walletAssignments', {
+				organizationId,
+				walletId: visibleWalletId,
+				userId: operatorId,
+				permissions: ['view'],
+				status: 'active',
+				updatedAt: Date.now()
+			});
+			return { organizationId, visibleWalletId, hiddenWalletId };
+		});
+		const visible = await operator.query(api.wallets.list, {
+			organizationId: ids.organizationId
+		});
+		expect(visible.map((wallet) => wallet._id)).toEqual([ids.visibleWalletId]);
+		await expect(
+			operator.query(api.wallets.get, {
+				organizationId: ids.organizationId,
+				walletId: ids.hiddenWalletId
+			})
+		).rejects.toThrow('Wallet access denied');
 	});
 });

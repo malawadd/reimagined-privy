@@ -26,7 +26,8 @@
 		Layers3,
 		BookOpenCheck,
 		ListChecks,
-		BarChart3
+		BarChart3,
+		MailPlus
 	} from '@lucide/svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
@@ -41,6 +42,11 @@
 	const currentUser = useQuery(api.users.getCurrent, () =>
 		convexAuth.isAuthenticated ? {} : 'skip'
 	);
+	const pendingInvitations = useQuery(api.members.pendingForCurrent, () =>
+		convexAuth.isAuthenticated ? {} : 'skip'
+	);
+	const acceptInvitation = useMutation(api.members.acceptInvitation);
+	const declineInvitation = useMutation(api.members.declineInvitation);
 	const shellSummary = useQuery(api.dashboard.get, () =>
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
@@ -97,10 +103,7 @@
 	$effect(() => {
 		if (privyAuth.user && convexAuth.isAuthenticated && !syncStarted) {
 			syncStarted = true;
-			void syncCurrentUser({
-				email: privyAuth.user.email,
-				name: privyAuth.user.name
-			});
+			void syncCurrentUser({});
 		}
 	});
 
@@ -111,6 +114,9 @@
 	async function signOut() {
 		await privyAuth.logout();
 		await goto('/login');
+	}
+	async function accept(id: import('../../convex/_generated/dataModel').Id<'invitations'>) {
+		await acceptInvitation({ invitationId: id });
 	}
 
 	function initials(value?: string) {
@@ -215,6 +221,52 @@
 				>
 			</div>
 		</header>
-		<main>{@render children()}</main>
+		<main>
+			{#each pendingInvitations.data ?? [] as invitation}
+				<div class="invitation-banner">
+					<MailPlus size={18} />
+					<div>
+						<strong>{invitation.organization?.name ?? 'Workspace'} invited you</strong><span
+							>{invitation.role} access for {currentUser.data?.email}</span
+						>
+					</div>
+					<button
+						class="button secondary"
+						onclick={() => declineInvitation({ invitationId: invitation._id })}>Decline</button
+					><button class="button primary" onclick={() => accept(invitation._id)}>Accept</button>
+				</div>
+			{/each}
+			{@render children()}
+		</main>
 	</div>
 </div>
+
+<style>
+	.invitation-banner {
+		display: grid;
+		grid-template-columns: auto 1fr auto auto;
+		gap: 10px;
+		align-items: center;
+		margin-bottom: 14px;
+		border: 1px solid #cbdeda;
+		padding: 12px 14px;
+		color: #245e51;
+		background: #f1f8f5;
+	}
+	.invitation-banner div {
+		display: grid;
+	}
+	.invitation-banner span {
+		margin-top: 3px;
+		color: #678079;
+		font-size: 0.63rem;
+	}
+	@media (max-width: 650px) {
+		.invitation-banner {
+			grid-template-columns: auto 1fr;
+		}
+		.invitation-banner .button {
+			grid-row: 2;
+		}
+	}
+</style>

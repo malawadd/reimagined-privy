@@ -1,0 +1,17 @@
+{
+	"id": "event_sanitized_01",
+	"type": "intent.authorized",
+	"idempotency_key": "intent-authorized-sanitized-01",
+	"data": {
+		"intent_id": "intent_quorum_sanitized_01",
+		"status": "pending",
+		"authorization_details": [
+			{
+				"threshold": 1,
+				"members": [
+					{ "type": "user", "user_id": "did:privy:sanitized-owner", "signed_at": 1789142400000 }
+				]
+			}
+		]
+	}
+}

@@ -1,7 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { internal } from './_generated/api';
-import { assertOrgScoped, requireMembership } from './lib/authz';
+import { assertOrgScoped, requireMembership, requireWalletPermission } from './lib/authz';
 import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../lib/domain';
 import { appendAudit } from './lib/audit';
 
@@ -149,13 +149,15 @@ export const queuePayment = mutation({
 		deduplicated: v.boolean()
 	}),
 	handler: async (ctx, args) => {
-		const { user } = await requireMembership(ctx, args.organizationId, 'payable:manage');
-		const [payable, wallet] = await Promise.all([
-			ctx.db.get(args.payableId),
-			ctx.db.get(args.walletId)
-		]);
+		const { user, wallet } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			args.walletId,
+			'initiate',
+			'payable:manage'
+		);
+		const payable = await ctx.db.get(args.payableId);
 		assertOrgScoped(payable, args.organizationId);
-		assertOrgScoped(wallet, args.organizationId);
 		if (payable.status === 'void' || payable.status === 'paid')
 			throw new Error('This payable cannot be queued.');
 		if (payable.operationId) {

@@ -61,6 +61,7 @@ export const operationDocumentValidator = v.object({
 		v.literal('payment'),
 		v.literal('treasuryTransfer'),
 		v.literal('walletUpdate'),
+		v.literal('quorumUpdate'),
 		v.literal('policyUpdate'),
 		v.literal('automationRun')
 	),
@@ -95,6 +96,7 @@ export const walletDocumentValidator = v.object({
 	ownerQuorumId: v.string(),
 	signerIds: v.array(v.string()),
 	policyIds: v.array(v.string()),
+	approvalThreshold: v.optional(v.number()),
 	syncVersion: v.number(),
 	syncedAt: v.number(),
 	purpose: v.optional(v.union(v.literal('treasury'), v.literal('collection'))),

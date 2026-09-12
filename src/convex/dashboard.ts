@@ -19,7 +19,7 @@ export const get = query({
 	}),
 	handler: async (ctx, args) => {
 		await requireMembership(ctx, args.organizationId, 'wallet:read');
-		const [wallets, policies, memberships, automations, operations, quorum] = await Promise.all([
+		const [wallets, policies, memberships, automations, operations, reviewers] = await Promise.all([
 			ctx.db
 				.query('wallets')
 				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
@@ -42,10 +42,16 @@ export const get = query({
 				.order('desc')
 				.take(20),
 			ctx.db
-				.query('reviewerQuorums')
+				.query('reviewerMembers')
 				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
-				.first()
+				.take(500)
 		]);
+		const primaryWallet = wallets[0];
+		const activeReviewers = primaryWallet
+			? reviewers.filter(
+					(reviewer) => reviewer.walletId === primaryWallet._id && reviewer.status === 'active'
+				)
+			: [];
 
 		return {
 			walletCount: wallets.length,
@@ -55,11 +61,11 @@ export const get = query({
 				.length,
 			pendingApprovalCount: operations.filter((operation) => operation.status === 'pendingApproval')
 				.length,
-			quorum: quorum
+			quorum: primaryWallet
 				? {
-						threshold: quorum.threshold,
-						reviewerCount: quorum.reviewerCount,
-						mfaRequired: quorum.mfaRequired
+						threshold: primaryWallet.approvalThreshold ?? 1,
+						reviewerCount: activeReviewers.length,
+						mfaRequired: activeReviewers.length > 0
 					}
 				: null,
 			recentOperations: operations

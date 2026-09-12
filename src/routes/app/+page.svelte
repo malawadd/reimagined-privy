@@ -63,8 +63,8 @@
 	<section class="panel empty-state">
 		<Users size={28} />
 		<h2>No active organization</h2>
-		<p>Your identity is authenticated, but it has not been assigned to a Ratib pilot workspace.</p>
-		<a class="button primary" href="/app/setup">Request pilot access <ArrowRight size={15} /></a>
+		<p>Your identity is authenticated. Create a Ratib organization to start operating.</p>
+		<a class="button primary" href="/app/setup">Create organization <ArrowRight size={15} /></a>
 	</section>
 {:else if summary.isLoading}
 	<section class="loading-grid" aria-label="Loading organization overview">
@@ -115,7 +115,7 @@
 				><small
 					>{summary.data.quorum?.mfaRequired
 						? 'MFA required by Privy'
-						: 'Verify in Privy Dashboard'}</small
+						: 'Managed inside Ratib'}</small
 				>
 			</div>
 		</div>

@@ -5,6 +5,12 @@ import { internalAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { createPrivyGateway } from './privy/gateway';
 
+function providerErrorCode(error: unknown) {
+	if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string')
+		return `privy:${error.code}`;
+	return 'privy_request_failed';
+}
+
 export const provisionWallet = internalAction({
 	args: {
 		organizationId: v.id('organizations'),
@@ -55,6 +61,36 @@ export const provisionWallet = internalAction({
 			provider: balance
 		});
 		return walletId;
+	}
+});
+
+export const requestQuorumUpdate = internalAction({
+	args: {
+		operationId: v.id('operations'),
+		privyQuorumId: v.string(),
+		userIds: v.array(v.string()),
+		threshold: v.number()
+	},
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		try {
+			const provider = await createPrivyGateway().requestKeyQuorumUpdate(args.privyQuorumId, {
+				user_ids: args.userIds,
+				authorization_threshold: args.threshold
+			});
+			await ctx.runMutation(internal.operationState.saveIntent, {
+				operationId: args.operationId,
+				provider,
+				type: 'KEY_QUORUM'
+			});
+		} catch (error) {
+			await ctx.runMutation(internal.operationState.updateOperationStatus, {
+				operationId: args.operationId,
+				status: 'failed',
+				errorCode: providerErrorCode(error)
+			});
+		}
+		return null;
 	}
 });
 

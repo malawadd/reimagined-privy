@@ -4,12 +4,19 @@ import { generateAuthorizationSignature, PrivyClient } from '@privy-io/node';
 import { BASE_SEPOLIA } from '../../lib/domain';
 
 export interface PrivyGateway {
+	createKeyQuorum(input: {
+		userIds: string[];
+		threshold: number;
+		displayName: string;
+	}): Promise<unknown>;
+	getKeyQuorum(keyQuorumId: string): Promise<unknown>;
 	provisionTreasury(input: {
 		ownerId: string;
 		name: string;
 		ownerPolicyId: string;
 		automationSigner?: { signerId: string; overridePolicyId: string };
 		idempotencyKey: string;
+		externalId?: string;
 	}): Promise<unknown>;
 	listWallets(): Promise<unknown[]>;
 	getWallet(walletId: string): Promise<unknown>;
@@ -33,6 +40,13 @@ export interface PrivyGateway {
 	requestWalletUpdate(walletId: string, update: Record<string, unknown>): Promise<unknown>;
 	requestPolicyUpdate(policyId: string, update: Record<string, unknown>): Promise<unknown>;
 	getIntent(intentId: string): Promise<unknown>;
+	authorizeIntent(
+		intentId: string,
+		signature: string,
+		timestamp: number,
+		accessToken: string
+	): Promise<unknown>;
+	requestKeyQuorumUpdate(keyQuorumId: string, update: Record<string, unknown>): Promise<unknown>;
 	listIntents(): Promise<unknown[]>;
 	getWalletAction(walletId: string, actionId: string): Promise<unknown>;
 }
@@ -50,12 +64,25 @@ export class LivePrivyGateway implements PrivyGateway {
 		});
 	}
 
+	createKeyQuorum(input: { userIds: string[]; threshold: number; displayName: string }) {
+		return this.client.keyQuorums().create({
+			user_ids: input.userIds,
+			authorization_threshold: input.threshold,
+			display_name: input.displayName
+		});
+	}
+
+	getKeyQuorum(keyQuorumId: string) {
+		return this.client.keyQuorums().get(keyQuorumId);
+	}
+
 	async provisionTreasury(input: {
 		ownerId: string;
 		name: string;
 		ownerPolicyId: string;
 		automationSigner?: { signerId: string; overridePolicyId: string };
 		idempotencyKey: string;
+		externalId?: string;
 	}) {
 		return this.client.wallets().create({
 			chain_type: 'ethereum',
@@ -70,6 +97,7 @@ export class LivePrivyGateway implements PrivyGateway {
 					]
 				: undefined,
 			idempotency_key: input.idempotencyKey,
+			external_id: input.externalId,
 			display_name: input.name
 		});
 	}
@@ -84,11 +112,18 @@ export class LivePrivyGateway implements PrivyGateway {
 		return this.client.wallets().get(walletId);
 	}
 
-	getWalletBalance(walletId: string) {
-		return this.client.wallets().balance.get(walletId, {
-			chain: 'base_sepolia',
-			asset: ['eth', 'usdc']
-		});
+	async getWalletBalance(walletId: string) {
+		const [eth, usdc] = await Promise.all([
+			this.client.wallets().balance.get(walletId, {
+				chain: 'base_sepolia',
+				asset: 'eth'
+			}),
+			this.client.wallets().balance.get(walletId, {
+				chain: 'base_sepolia',
+				asset: 'usdc'
+			})
+		]);
+		return { balances: [...eth.balances, ...usdc.balances] };
 	}
 
 	getPolicy(policyId: string) {
@@ -163,6 +198,28 @@ export class LivePrivyGateway implements PrivyGateway {
 	getIntent(intentId: string) {
 		return this.client.intents().get(intentId);
 	}
+	authorizeIntent(intentId: string, signature: string, timestamp: number, accessToken: string) {
+		return fetch(`https://api.privy.io/v1/intents/${encodeURIComponent(intentId)}/authorize`, {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${accessToken}`,
+				'content-type': 'application/json',
+				'privy-app-id': this.appId
+			},
+			body: JSON.stringify({ signature, timestamp })
+		}).then(async (response) => {
+			if (!response.ok) {
+				const errorBody = await response.text();
+				throw new Error(
+					`Privy intent authorization failed (${response.status}): ${sanitizeProviderError(errorBody)}`
+				);
+			}
+			return response.json();
+		});
+	}
+	requestKeyQuorumUpdate(keyQuorumId: string, update: Record<string, unknown>) {
+		return this.client.intents().updateKeyQuorum(keyQuorumId, update as never);
+	}
 	async listIntents() {
 		const output: unknown[] = [];
 		for await (const intent of this.client.intents().list()) output.push(intent);
@@ -170,6 +227,22 @@ export class LivePrivyGateway implements PrivyGateway {
 	}
 	getWalletAction(walletId: string, actionId: string) {
 		return this.client.wallets().actions.get(actionId, { wallet_id: walletId } as never);
+	}
+}
+
+function sanitizeProviderError(value: string) {
+	try {
+		const parsed = JSON.parse(value) as { code?: unknown; error?: unknown; message?: unknown };
+		const code = typeof parsed.code === 'string' ? parsed.code : 'provider_error';
+		const message =
+			typeof parsed.error === 'string'
+				? parsed.error
+				: typeof parsed.message === 'string'
+					? parsed.message
+					: 'request rejected';
+		return `${code}: ${message}`.replace(/[\r\n]/g, ' ').slice(0, 300);
+	} catch {
+		return 'provider_error: request rejected';
 	}
 }
 

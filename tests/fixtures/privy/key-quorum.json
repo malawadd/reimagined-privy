@@ -1,0 +1,7 @@
+{
+	"id": "key_quorum_sanitized_01",
+	"display_name": "Ratib organization:run-key",
+	"authorization_threshold": 1,
+	"user_ids": ["did:privy:sanitized-owner"],
+	"authorization_keys": []
+}

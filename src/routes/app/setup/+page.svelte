@@ -1,316 +1,308 @@
 <script lang="ts">
-	import { Check, Circle, Clock3, ExternalLink, Send, ShieldCheck } from '@lucide/svelte';
+	import { Building2, Check, Circle, RefreshCw, ShieldCheck, WalletCards } from '@lucide/svelte';
 	import { useMutation, useQuery } from 'convex-svelte';
 	import { api } from '../../../convex/_generated/api';
+	import type { Id } from '../../../convex/_generated/dataModel';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import { privyAuth } from '$lib/auth/privy.svelte';
+	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import { workspace } from '$lib/workspace.svelte';
 
-	const summary = useQuery(api.dashboard.get, () =>
+	const wallets = useQuery(api.wallets.list, () =>
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
-	const pilotRequests = useQuery(api.organizations.listPilotRequests, () =>
-		privyAuth.user ? {} : 'skip'
+	const runs = useQuery(api.provisioning.list, () =>
+		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
-	const requestPilotAccess = useMutation(api.organizations.requestPilotAccess);
-	let companyName = $state('');
-	let contactEmail = $state(privyAuth.user?.email ?? '');
-	let useCase = $state('');
+	const createOrganization = useMutation(api.organizations.createAndProvision);
+	const createWallet = useMutation(api.wallets.create);
+	const retryRun = useMutation(api.provisioning.retry);
+	let name = $state('');
 	let submitting = $state(false);
-	let submitError = $state<string | null>(null);
+	let error = $state<string | null>(null);
 
-	let steps = $derived([
-		{
-			name: 'Business approved',
-			detail: 'Workspace activated for the controlled pilot.',
-			done: Boolean(workspace.activeOrganizationId)
-		},
-		{
-			name: 'Reviewer quorum',
-			detail: 'Privy Dashboard reviewers and MFA authority synchronized.',
-			done: Boolean(summary.data?.quorum)
-		},
-		{
-			name: 'Treasury wallet',
-			detail: 'A policy-owned Base Sepolia wallet is provisioned.',
-			done: (summary.data?.walletCount ?? 0) > 0
-		},
-		{
-			name: 'Owner policy',
-			detail: 'Default-deny wallet controls are mirrored from Privy.',
-			done: (summary.data?.policyCount ?? 0) > 0
-		},
-		{
-			name: 'Finance team',
-			detail: 'A second team member has an explicit application role.',
-			done: (summary.data?.memberCount ?? 0) > 1
-		},
-		{
-			name: 'Operational proof',
-			detail: 'A testnet operation has completed with linked evidence.',
-			done: Boolean(
-				summary.data?.recentOperations.some((operation) => operation.status === 'succeeded')
-			)
-		}
-	]);
-	let completeCount = $derived(steps.filter((step) => step.done).length);
-
-	async function submitRequest() {
+	async function startOrganization() {
 		submitting = true;
-		submitError = null;
+		error = null;
 		try {
-			await requestPilotAccess({ companyName, contactEmail, useCase });
-			companyName = '';
-			useCase = '';
-		} catch (error) {
-			submitError = error instanceof Error ? error.message : 'Unable to submit the pilot request.';
+			await createOrganization({ name, requestKey: crypto.randomUUID() });
+			name = '';
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to create the organization.';
 		} finally {
 			submitting = false;
 		}
 	}
+	async function setupTreasury() {
+		if (!workspace.activeOrganizationId) return;
+		submitting = true;
+		error = null;
+		try {
+			await createWallet({
+				organizationId: workspace.activeOrganizationId,
+				name: 'Operating Treasury',
+				requestKey: crypto.randomUUID()
+			});
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to start treasury setup.';
+		} finally {
+			submitting = false;
+		}
+	}
+	async function retry(id: Id<'provisioningRuns'>) {
+		if (!workspace.activeOrganizationId) return;
+		try {
+			await retryRun({ organizationId: workspace.activeOrganizationId, provisioningRunId: id });
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to retry provisioning.';
+		}
+	}
+	const stages = ['Quorum', 'Policy', 'Wallet'];
+	function completeStage(status: string, index: number) {
+		const order = [
+			'pending',
+			'claimed',
+			'quorumCreated',
+			'policyCreated',
+			'walletCreated',
+			'succeeded'
+		];
+		return order.indexOf(status) >= index + 2 || status === 'succeeded';
+	}
 </script>
 
 <svelte:head><title>Setup | Ratib</title></svelte:head>
-
 <PageHeader
-	eyebrow="CONTROLLED ONBOARDING"
-	title="Pilot setup"
-	description="Verify the business, establish Privy authority, and prove the Base Sepolia operating path."
+	eyebrow="SELF-SERVICE ONBOARDING"
+	title="Workspace setup"
+	description="Create the organization, its Privy user quorum, Base Sepolia policy, and first treasury without leaving Ratib."
 />
 
 {#if !workspace.activeOrganizationId}
-	<div class="setup-grid">
-		<section class="panel request-panel">
-			{#if pilotRequests.isLoading}
-				<div class="request-state">
-					<Clock3 size={25} />
-					<h2>Checking pilot status</h2>
-				</div>
-			{:else if pilotRequests.data?.length}
-				<div class="request-state">
-					<Clock3 size={28} />
-					<p class="eyebrow">REQUEST RECEIVED</p>
-					<h2>{pilotRequests.data[0].name}</h2>
-					<p>
-						Your controlled-pilot request is awaiting manual review. Wallets and money movement
-						remain disabled until the business and Privy control setup are approved.
-					</p>
-					<dl>
-						<div>
-							<dt>Contact</dt>
-							<dd>{pilotRequests.data[0].pilotContactEmail}</dd>
-						</div>
-						<div>
-							<dt>Submitted</dt>
-							<dd>
-								{pilotRequests.data[0].requestedAt
-									? new Date(pilotRequests.data[0].requestedAt).toLocaleString()
-									: 'Recorded'}
-							</dd>
-						</div>
-						<div>
-							<dt>Status</dt>
-							<dd>Pending review</dd>
-						</div>
-					</dl>
-				</div>
-			{:else}
-				<header>
-					<div>
-						<h2>Request pilot access</h2>
-						<p>Tell us which real finance workflow Ratib will support.</p>
-					</div>
-					<Send size={19} />
-				</header>
-				<form
-					onsubmit={(event) => {
-						event.preventDefault();
-						void submitRequest();
-					}}
-				>
-					<label for="company-name">Legal or operating company name</label><input
-						id="company-name"
-						bind:value={companyName}
-						minlength="2"
-						maxlength="100"
-						required
-					/>
-					<label for="contact-email">Pilot contact email</label><input
-						id="contact-email"
-						type="email"
-						autocomplete="email"
-						bind:value={contactEmail}
-						required
-					/>
-					<label for="use-case">Digital asset operating use case</label><textarea
-						id="use-case"
-						bind:value={useCase}
-						minlength="20"
-						maxlength="1000"
-						rows="6"
-						placeholder="Describe assets, payment volume, approvers, and the workflow you need to operate."
-						required></textarea>
-					<p>
-						Submitting does not create a wallet or enable transactions. A Ratib operator must verify
-						and activate the organization.
-					</p>
-					<button class="button primary" type="submit" disabled={submitting}
-						>{submitting ? 'Submitting…' : 'Submit pilot request'} <Send size={14} /></button
-					>
-					{#if submitError}<div class="form-error" role="alert">{submitError}</div>{/if}
-				</form>
-			{/if}
-		</section>
-		<aside class="side-stack">
-			<section class="panel production-gate">
-				<ShieldCheck size={24} />
-				<p class="eyebrow">ACTIVATION BOUNDARY</p>
-				<h2>Manual and fail closed</h2>
-				<p>
-					Ratib verifies the organization, reviewer quorum, owner policy, and wallet configuration
-					before enabling live provider actions.
-				</p>
-				<code>Base Sepolia · chain 84532</code><code>Privy authority required</code>
-			</section>
-		</aside>
-	</div>
+	<section class="panel create-panel">
+		<div class="setup-icon"><Building2 size={28} /></div>
+		<p class="eyebrow">NEW ORGANIZATION</p>
+		<h2>Create your Ratib workspace</h2>
+		<p>Your verified Privy identity becomes the initial owner and 1-of-1 approver.</p>
+		<form
+			onsubmit={(event) => {
+				event.preventDefault();
+				void startOrganization();
+			}}
+		>
+			<label for="organization-name">Organization name</label>
+			<input id="organization-name" bind:value={name} minlength="2" maxlength="100" required />
+			<button class="button primary" type="submit" disabled={submitting}
+				>{submitting ? 'Creating…' : 'Create organization'} <Building2 size={15} /></button
+			>
+		</form>
+		{#if error}<p class="form-error" role="alert">{error}</p>{/if}
+	</section>
 {:else}
-	<div class="setup-grid">
-		<section class="panel setup-list">
+	<div class="setup-layout">
+		<section class="panel">
 			<header>
 				<div>
-					<h2>Workspace readiness</h2>
-					<p>Live provider configuration · Base Sepolia</p>
+					<h2>Treasury provisioning</h2>
+					<p>Durable provider runs for Base Sepolia.</p>
 				</div>
-				<strong>{completeCount} / {steps.length}</strong>
+				<ShieldCheck size={19} />
 			</header>
-			{#each steps as step, index}<article class:incomplete={!step.done}>
-					<span
-						>{#if step.done}<Check size={17} />{:else}<Circle size={17} />{/if}</span
+			{#if !runs.data?.length && wallets.data?.length === 0}
+				<div class="action-state">
+					<WalletCards size={30} />
+					<h3>Set up your treasury</h3>
+					<p>Create a Privy user quorum, a default ETH/USDC policy, and an organization wallet.</p>
+					<button class="button primary" onclick={setupTreasury} disabled={submitting}
+						>{submitting ? 'Starting…' : 'Set up treasury'}</button
 					>
-					<div>
-						<small>STEP {index + 1}</small>
-						<h3>{step.name}</h3>
-						<p>{step.detail}</p>
-					</div>
-					<a
-						href={index === 4
-							? '/app/team'
-							: index === 5
-								? '/app/audit'
-								: index > 0
-									? '/app/wallets'
-									: '/app/setup'}>{step.done ? 'Review' : 'Pending'} <ExternalLink size={13} /></a
-					>
-				</article>{/each}
+				</div>
+			{:else}
+				<div class="run-list">
+					{#each runs.data ?? [] as run}
+						<article>
+							<div class="run-heading">
+								<div>
+									<strong>{run.walletName}</strong><small class="mono"
+										>{run.providerReferenceId}</small
+									>
+								</div>
+								<StatusBadge status={run.status} />
+							</div>
+							<div class="stages">
+								{#each stages as stage, index}<span class:done={completeStage(run.status, index)}
+										>{#if completeStage(run.status, index)}<Check size={14} />{:else}<Circle
+												size={14}
+											/>{/if}{stage}</span
+									>{/each}
+							</div>
+							{#if run.errorCode}<p class="run-error">{run.errorCode}</p>{/if}
+							{#if run.status === 'failed' || run.status === 'ambiguous'}<button
+									class="button secondary"
+									onclick={() => retry(run._id)}
+									><RefreshCw size={14} />
+									{run.status === 'ambiguous' ? 'Reconcile' : 'Retry'}</button
+								>{/if}
+						</article>
+					{/each}
+				</div>
+			{/if}
 		</section>
-		<aside class="side-stack">
-			<section class="panel production-gate">
-				<ShieldCheck size={24} />
-				<p class="eyebrow">PRODUCTION GATE</p>
-				<h2>Fail closed by design</h2>
-				<p>
-					A production build requires browser-safe Privy and Convex configuration. Server
-					credentials, authorization keys, and webhook secrets stay in Convex environment variables.
-				</p>
-				<code>Privy live provider only</code><code>HTTPS Convex site required</code>
-			</section>
-			<section class="panel">
-				<h2>Environment separation</h2>
-				<p class="muted">
-					Development and production use independent Privy and Convex projects, keys, webhook
-					endpoints, and wallet funding.
-				</p>
-			</section>
+		<aside class="panel security">
+			<ShieldCheck size={25} />
+			<p class="eyebrow">SECURITY BOUNDARY</p>
+			<h2>Privy remains the authority</h2>
+			<p>
+				Ratib orchestrates key quorums, policy intents, MFA, and signatures in product.
+				Authorization material is never stored.
+			</p>
+			<code>Base Sepolia · eip155:84532</code><code>Circle USDC · 0x036C…7e</code>
 		</aside>
 	</div>
+	{#if error}<p class="form-error page-error" role="alert">{error}</p>{/if}
 {/if}
 
 <style>
-	.request-panel {
-		min-height: 530px;
-	}
-	.request-panel form {
+	.create-panel {
 		display: grid;
-		padding: 24px;
-	}
-	.request-panel label {
-		margin: 15px 0 7px;
-		color: #34474f;
-		font-size: 0.7rem;
-		font-weight: 750;
-	}
-	.request-panel input,
-	.request-panel textarea {
-		width: 100%;
-		border: 1px solid #d4dde0;
-		border-radius: 5px;
-		padding: 11px 12px;
-		color: #22343b;
-		background: white;
-		font: inherit;
-		font-size: 0.78rem;
-	}
-	.request-panel textarea {
-		resize: vertical;
-		line-height: 1.55;
-	}
-	.request-panel form > p {
-		margin: 14px 0;
-		color: #738189;
-		font-size: 0.67rem;
-		line-height: 1.55;
-	}
-	.request-panel form .button {
-		width: fit-content;
-	}
-	.request-state {
-		display: grid;
-		min-height: 440px;
+		min-height: 460px;
 		place-items: center;
 		align-content: center;
-		padding: 35px;
+		padding: 36px;
 		text-align: center;
 	}
-	.request-state :global(svg) {
-		color: #b27422;
+	.setup-icon {
+		display: grid;
+		width: 54px;
+		height: 54px;
+		place-items: center;
+		border-radius: 7px;
+		color: #fff;
+		background: #173f4d;
 	}
-	.request-state h2 {
-		margin-top: 10px;
+	.create-panel h2,
+	.action-state h3,
+	.security h2 {
+		margin: 9px 0;
 		font-family: Georgia, serif;
-		font-size: 1.55rem;
+		font-size: 1.45rem;
+		font-weight: 500;
 	}
-	.request-state > p:not(.eyebrow) {
-		max-width: 560px;
-		margin-top: 10px;
-		color: #68787f;
-		font-size: 0.78rem;
+	.create-panel > p:not(.eyebrow),
+	.action-state p,
+	.security > p:not(.eyebrow) {
+		max-width: 520px;
+		color: #6d7c82;
+		font-size: 0.76rem;
 		line-height: 1.65;
 	}
-	.request-state dl {
-		width: min(480px, 100%);
-		margin: 26px 0 0;
-		border-top: 1px solid #e0e6e8;
+	.create-panel form {
+		display: grid;
+		width: min(430px, 100%);
+		margin-top: 20px;
+		text-align: left;
 	}
-	.request-state dl div {
+	.create-panel label {
+		margin-bottom: 6px;
+		font-size: 0.67rem;
+		font-weight: 750;
+	}
+	.create-panel input {
+		border: 1px solid #d4dde0;
+		border-radius: 5px;
+		padding: 11px;
+		font: inherit;
+	}
+	.create-panel .button {
+		justify-self: start;
+		margin-top: 12px;
+	}
+	.setup-layout {
+		display: grid;
+		grid-template-columns: minmax(0, 1.5fr) minmax(270px, 0.7fr);
+		gap: 14px;
+	}
+	.action-state {
+		display: grid;
+		min-height: 320px;
+		place-items: center;
+		align-content: center;
+		padding: 28px;
+		text-align: center;
+	}
+	.action-state :global(svg),
+	.security :global(svg) {
+		color: #397563;
+	}
+	.run-list article {
+		display: grid;
+		gap: 14px;
+		border-bottom: 1px solid #e0e6e8;
+		padding: 18px;
+	}
+	.run-heading {
 		display: flex;
 		justify-content: space-between;
-		border-bottom: 1px solid #e0e6e8;
-		padding: 12px 2px;
-		font-size: 0.7rem;
+		gap: 12px;
 	}
-	.request-state dt {
+	.run-heading strong,
+	.run-heading small {
+		display: block;
+	}
+	.run-heading small {
+		margin-top: 5px;
 		color: #7b898f;
+		font-size: 0.55rem;
 	}
-	.request-state dd {
-		margin: 0;
-		font-weight: 750;
+	.stages {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 6px;
 	}
-	.setup-list article a {
-		display: inline-flex;
+	.stages span {
+		display: flex;
 		align-items: center;
-		gap: 5px;
-		font-size: 0.66rem;
-		font-weight: 750;
+		gap: 6px;
+		border: 1px solid #dce4e6;
+		padding: 8px;
+		color: #78868c;
+		font-size: 0.63rem;
+	}
+	.stages span.done {
+		color: #286454;
+		background: #eff6f3;
+	}
+	.run-error {
+		color: #9d4039;
+		font-size: 0.65rem;
+	}
+	.run-list .button {
+		width: fit-content;
+	}
+	.security {
+		display: grid;
+		align-content: start;
+		gap: 7px;
+		padding: 24px;
+	}
+	.security code {
+		display: block;
+		margin-top: 5px;
+		border: 1px solid #dce4e6;
+		padding: 8px;
+		font-size: 0.6rem;
+	}
+	.page-error {
+		margin-top: 12px;
+	}
+	@media (max-width: 800px) {
+		.setup-layout {
+			grid-template-columns: 1fr;
+		}
+		.stages {
+			grid-template-columns: 1fr;
+		}
+		.create-panel {
+			padding: 24px 16px;
+		}
 	}
 </style>

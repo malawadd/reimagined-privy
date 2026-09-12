@@ -215,10 +215,56 @@ export const applyProviderState = internalMutation({
 		const operation = await ctx.db.get(args.operationId);
 		if (!operation) return null;
 		const provider = args.provider as Record<string, unknown>;
+		const currentIntent = await ctx.db
+			.query('intentSnapshots')
+			.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
+			.order('desc')
+			.first();
+		if (currentIntent) {
+			const merged = { ...(currentIntent.raw as Record<string, unknown>), ...provider };
+			const progress = providerIntentProgress(merged);
+			await ctx.db.insert('intentSnapshots', {
+				organizationId: operation.organizationId,
+				operationId: operation._id,
+				privyIntentId: currentIntent.privyIntentId,
+				type: providerIntentType(merged, currentIntent.type),
+				status: String(merged.status ?? currentIntent.status),
+				approvals: progress.approvals,
+				threshold: progress.threshold || currentIntent.threshold,
+				expiresAt:
+					typeof merged.expires_at === 'number' ? merged.expires_at : currentIntent.expiresAt,
+				providerUpdatedAt: Date.now(),
+				raw: merged
+			});
+		}
 		const providerStatus = String(provider.status ?? '').toLowerCase();
 		const mapped = providerOperationStatus(provider);
 		if (!mapped) return null;
 		const status = monotonicStatus(operation.status, mapped);
+		if (status === 'succeeded' && operation.kind === 'walletUpdate') {
+			const completeIntent = {
+				...((currentIntent?.raw as Record<string, unknown> | undefined) ?? {}),
+				...provider
+			};
+			const resourceId = completeIntent.resource_id;
+			const requestDetails = completeIntent.request_details as
+				{ body?: Record<string, unknown> } | undefined;
+			const displayName = requestDetails?.body?.display_name;
+			const wallet = operation.sourceWalletId
+				? await ctx.db.get(operation.sourceWalletId)
+				: typeof resourceId === 'string'
+					? await ctx.db
+							.query('wallets')
+							.withIndex('by_privy_id', (q) => q.eq('privyWalletId', resourceId))
+							.unique()
+					: null;
+			if (wallet && typeof displayName === 'string' && displayName.trim())
+				await ctx.db.patch(wallet._id, {
+					name: displayName.trim(),
+					syncVersion: wallet.syncVersion + 1,
+					syncedAt: Date.now()
+				});
+		}
 		await ctx.db.patch(operation._id, { status, updatedAt: Date.now() });
 		await syncLinkedFinancialRecord(
 			ctx,
@@ -250,6 +296,60 @@ async function syncLinkedFinancialRecord(
 	transactionHash?: string
 ) {
 	const now = Date.now();
+	if (operation.kind === 'quorumUpdate') {
+		const thresholdChange = await ctx.db
+			.query('quorumThresholdChanges')
+			.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
+			.unique();
+		if (thresholdChange && status === 'succeeded')
+			await ctx.db.patch(thresholdChange.walletId, {
+				approvalThreshold: thresholdChange.requestedThreshold,
+				syncedAt: now
+			});
+		const change = await ctx.db
+			.query('quorumChangeRequests')
+			.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
+			.unique();
+		if (change) {
+			const reviewer = await ctx.db
+				.query('reviewerMembers')
+				.withIndex('by_wallet_user', (q) =>
+					q.eq('walletId', change.walletId).eq('userId', change.userId)
+				)
+				.unique();
+			const assignment = await ctx.db
+				.query('walletAssignments')
+				.withIndex('by_wallet_user', (q) =>
+					q.eq('walletId', change.walletId).eq('userId', change.userId)
+				)
+				.unique();
+			if (status === 'succeeded') {
+				if (change.action === 'add' && reviewer)
+					await ctx.db.patch(reviewer._id, { status: 'active', updatedAt: now });
+				if (change.action === 'remove' && reviewer) await ctx.db.delete(reviewer._id);
+				if (assignment)
+					await ctx.db.patch(assignment._id, {
+						status: assignment.permissions.length ? 'active' : 'suspended',
+						updatedAt: now
+					});
+			} else if (['failed', 'rejected', 'expired', 'cancelled'].includes(status)) {
+				if (change.action === 'add' && reviewer) await ctx.db.delete(reviewer._id);
+				if (change.action === 'remove' && reviewer)
+					await ctx.db.patch(reviewer._id, { status: 'active', updatedAt: now });
+				if (assignment) {
+					const permissions =
+						change.action === 'add'
+							? assignment.permissions.filter((permission) => permission !== 'approve')
+							: [...new Set([...assignment.permissions, 'approve' as const])];
+					await ctx.db.patch(assignment._id, {
+						permissions,
+						status: permissions.length ? 'active' : 'suspended',
+						updatedAt: now
+					});
+				}
+			}
+		}
+	}
 	if (status === 'succeeded') await postOperationEntry(ctx, operation, transactionHash);
 	if (operation.sourcePayableId) {
 		const payable = await ctx.db.get(operation.sourcePayableId);

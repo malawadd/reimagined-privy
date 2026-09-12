@@ -1,0 +1,20 @@
+{
+	"intent_id": "intent_quorum_sanitized_01",
+	"intent_type": "KEY_QUORUM",
+	"resource_id": "key_quorum_sanitized_01",
+	"status": "pending",
+	"request_details": {
+		"method": "PATCH",
+		"url": "https://api.privy.io/v1/key_quorums/key_quorum_sanitized_01",
+		"body": {
+			"authorization_threshold": 1,
+			"user_ids": ["did:privy:sanitized-owner", "did:privy:sanitized-approver"]
+		}
+	},
+	"authorization_details": [
+		{
+			"threshold": 1,
+			"members": [{ "type": "user", "user_id": "did:privy:sanitized-owner", "signed_at": null }]
+		}
+	]
+}

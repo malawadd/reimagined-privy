@@ -1,0 +1,22 @@
+{
+	"id": "policy_sanitized_01",
+	"name": "Treasury Base Sepolia controls",
+	"version": "1.0",
+	"chain_type": "ethereum",
+	"owner_id": "key_quorum_sanitized_01",
+	"rules": [
+		{
+			"name": "Allow owner Base Sepolia USDC transfers",
+			"method": "transfer",
+			"conditions": [
+				{
+					"field_source": "action_request_body",
+					"field": "source.chain",
+					"operator": "eq",
+					"value": "base_sepolia"
+				}
+			],
+			"action": "ALLOW"
+		}
+	]
+}

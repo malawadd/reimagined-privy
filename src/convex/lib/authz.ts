@@ -34,6 +34,26 @@ export async function requireMembership(
 	return { identity, user, membership, organization };
 }
 
+export async function requireWalletPermission(
+	ctx: GenericQueryCtx<DataModel> | GenericMutationCtx<DataModel>,
+	organizationId: Id<'organizations'>,
+	walletId: Id<'wallets'>,
+	permission: 'view' | 'initiate' | 'approve' | 'manage',
+	capability?: Capability
+) {
+	const scope = await requireMembership(ctx, organizationId, capability);
+	const wallet = await ctx.db.get(walletId);
+	assertOrgScoped(wallet, organizationId);
+	if (scope.membership.role === 'owner') return { ...scope, wallet };
+	const assignment = await ctx.db
+		.query('walletAssignments')
+		.withIndex('by_wallet_user', (q) => q.eq('walletId', walletId).eq('userId', scope.user._id))
+		.unique();
+	if (!assignment || assignment.status !== 'active' || !assignment.permissions.includes(permission))
+		throw new Error('Wallet access denied.');
+	return { ...scope, wallet, assignment };
+}
+
 export async function requirePlatformOperator(ctx: Ctx) {
 	const identity = await requireIdentity(ctx);
 	const allowed = (process.env.RATIB_OPERATOR_PRIVY_DIDS ?? '')

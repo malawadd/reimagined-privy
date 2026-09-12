@@ -50,11 +50,139 @@ export default defineSchema({
 	invitations: defineTable({
 		organizationId: v.id('organizations'),
 		email: v.string(),
+		normalizedEmail: v.optional(v.string()),
 		role,
 		invitedBy: v.id('users'),
-		status: v.union(v.literal('pending'), v.literal('accepted'), v.literal('revoked')),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('accepted'),
+			v.literal('declined'),
+			v.literal('revoked')
+		),
+		walletGrants: v.optional(
+			v.array(
+				v.object({
+					walletId: v.id('wallets'),
+					permissions: v.array(
+						v.union(
+							v.literal('view'),
+							v.literal('initiate'),
+							v.literal('approve'),
+							v.literal('manage')
+						)
+					)
+				})
+			)
+		),
 		expiresAt: v.number()
-	}).index('by_org_email', ['organizationId', 'email']),
+	})
+		.index('by_org_email', ['organizationId', 'email'])
+		.index('by_email_status', ['normalizedEmail', 'status']),
+	provisioningRuns: defineTable({
+		organizationId: v.id('organizations'),
+		requestedBy: v.id('users'),
+		runKey: v.string(),
+		kind: v.union(v.literal('organization'), v.literal('wallet')),
+		walletName: v.string(),
+		purpose: v.union(v.literal('treasury'), v.literal('collection')),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('claimed'),
+			v.literal('quorumCreated'),
+			v.literal('policyCreated'),
+			v.literal('walletCreated'),
+			v.literal('succeeded'),
+			v.literal('failed'),
+			v.literal('ambiguous')
+		),
+		privyQuorumId: v.optional(v.string()),
+		privyPolicyId: v.optional(v.string()),
+		privyWalletId: v.optional(v.string()),
+		walletId: v.optional(v.id('wallets')),
+		providerReferenceId: v.string(),
+		errorCode: v.optional(v.string()),
+		claimedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_org', ['organizationId', 'updatedAt'])
+		.index('by_run_key', ['runKey'])
+		.index('by_org_status', ['organizationId', 'status', 'updatedAt']),
+	walletAssignments: defineTable({
+		organizationId: v.id('organizations'),
+		walletId: v.id('wallets'),
+		userId: v.id('users'),
+		permissions: v.array(
+			v.union(v.literal('view'), v.literal('initiate'), v.literal('approve'), v.literal('manage'))
+		),
+		status: v.union(v.literal('active'), v.literal('pending'), v.literal('suspended')),
+		updatedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_wallet_user', ['walletId', 'userId'])
+		.index('by_user', ['userId']),
+	reviewerMembers: defineTable({
+		organizationId: v.id('organizations'),
+		walletId: v.id('wallets'),
+		userId: v.id('users'),
+		privyDid: v.string(),
+		status: v.union(v.literal('active'), v.literal('pending'), v.literal('removing')),
+		updatedAt: v.number()
+	})
+		.index('by_org', ['organizationId'])
+		.index('by_wallet_user', ['walletId', 'userId']),
+	quorumChangeRequests: defineTable({
+		organizationId: v.id('organizations'),
+		operationId: v.id('operations'),
+		walletId: v.id('wallets'),
+		userId: v.id('users'),
+		action: v.union(v.literal('add'), v.literal('remove')),
+		requestedThreshold: v.number(),
+		createdAt: v.number()
+	})
+		.index('by_operation', ['operationId'])
+		.index('by_wallet_user', ['walletId', 'userId']),
+	quorumThresholdChanges: defineTable({
+		organizationId: v.id('organizations'),
+		operationId: v.id('operations'),
+		walletId: v.id('wallets'),
+		previousThreshold: v.number(),
+		requestedThreshold: v.number(),
+		createdAt: v.number()
+	}).index('by_operation', ['operationId']),
+	personalWallets: defineTable({
+		organizationId: v.id('organizations'),
+		userId: v.id('users'),
+		privyWalletId: v.string(),
+		address: v.string(),
+		chainId: v.literal(84532),
+		verifiedAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_org_user', ['organizationId', 'userId'])
+		.index('by_privy_id', ['privyWalletId']),
+	payrollProfiles: defineTable({
+		organizationId: v.id('organizations'),
+		userId: v.id('users'),
+		eligibility: v.union(v.literal('active'), v.literal('paused')),
+		destinationKind: v.optional(v.union(v.literal('personal'), v.literal('external'))),
+		personalWalletId: v.optional(v.id('personalWallets')),
+		externalAddress: v.optional(v.string()),
+		externalVerifiedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_org_user', ['organizationId', 'userId'])
+		.index('by_org', ['organizationId']),
+	walletVerificationChallenges: defineTable({
+		organizationId: v.id('organizations'),
+		userId: v.id('users'),
+		address: v.string(),
+		nonceHash: v.string(),
+		message: v.string(),
+		expiresAt: v.number(),
+		usedAt: v.optional(v.number())
+	})
+		.index('by_org_user', ['organizationId', 'userId'])
+		.index('by_nonce_hash', ['nonceHash']),
 	servicePrincipals: defineTable({
 		organizationId: v.id('organizations'),
 		name: v.string(),
@@ -74,6 +202,7 @@ export default defineSchema({
 		ownerQuorumId: v.string(),
 		signerIds: v.array(v.string()),
 		policyIds: v.array(v.string()),
+		approvalThreshold: v.optional(v.number()),
 		syncVersion: v.number(),
 		syncedAt: v.number(),
 		purpose: v.optional(v.union(v.literal('treasury'), v.literal('collection'))),
@@ -130,6 +259,7 @@ export default defineSchema({
 			v.literal('payment'),
 			v.literal('treasuryTransfer'),
 			v.literal('walletUpdate'),
+			v.literal('quorumUpdate'),
 			v.literal('policyUpdate'),
 			v.literal('automationRun')
 		),
