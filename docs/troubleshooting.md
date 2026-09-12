@@ -6,5 +6,5 @@
 - **Automation receives `policy_violation`:** verify Base Sepolia, Circle test USDC, amount ≤ configured ceiling, exact recipient allowlist, signer attachment, and signer override policy.
 - **Duplicate webhook:** this is expected with at-least-once delivery. Confirm one receipt for the Svix ID/idempotency key and inspect processing errors.
 - **Ambiguous run:** do not replay manually. Reconcile by provider reference/action ID; only retry when lookup proves no side effect exists.
-- **Build gate fails:** local `pnpm build` supports mock UI validation. Deployment must use `pnpm build:production` with `PUBLIC_PRIVY_MODE=live` and complete HTTPS public configuration.
+- **Build gate fails:** deployment must use `pnpm build:production` with complete public identifiers and HTTPS Convex configuration.
 - **Convex type errors after cloning:** run `pnpm convex:dev` to regenerate `src/convex/_generated` for your project.

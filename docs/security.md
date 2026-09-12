@@ -20,6 +20,6 @@ All policies are default-deny. Enable exact chain, method, asset/contract, amoun
 - Out-of-order event: operation state can advance but cannot regress.
 - Double spend on timeout: mark ambiguous and reconcile by provider reference before retrying.
 - Bundle leak: no server SDK or secret environment name is imported by client routes.
-- Test mode in production: `pnpm build:production` rejects mock mode, missing public integration values, and non-HTTPS Convex endpoints.
+- Incomplete production configuration: `pnpm build:production` rejects missing public integration values and non-HTTPS Convex endpoints; backend provider calls fail closed when Convex secrets are absent.
 
 Before mainnet expansion, add independent security review, transaction simulation, recipient risk/compliance controls, incident runbooks, monitoring, and spend alerts. Mainnet is intentionally disabled here.

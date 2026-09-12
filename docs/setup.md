@@ -1,15 +1,25 @@
 # Setup
 
 1. Use Node 22, enable Corepack, and run `pnpm install`.
-2. Copy `.env.example` to `.env`. Keep `PUBLIC_PRIVY_MODE=mock` for local UI development. The Convex CLI writes deployment coordinates to `.env.local`, which has higher precedence.
+2. Copy `.env.example` to `.env` and set the browser-safe Privy and Convex identifiers. The Convex CLI writes deployment coordinates to `.env.local`, which has higher precedence.
 3. Create separate development Privy and Convex projects. In Privy, enable email OTP and Google, add the local/production domains, and obtain an access-token verification key.
 4. Create three Privy Dashboard reviewers, require MFA, and configure the reference 2-of-3 key quorum. Manual approvals and production webhooks require the appropriate Privy entitlement.
 5. Create a separate backend authorization key. Never reuse a reviewer or policy-management key for automation.
-6. Run `pnpm keys:generate`. It creates ignored local RSA material, a valid Privy P-256 signer, a mock Svix secret, and `.local/convex.local.env`. Import that file with `pnpm exec convex env set --deployment local --from-file .local/convex.local.env --force`. Never commit `.local`.
+6. Run `pnpm keys:generate`. It creates ignored RSA material for the Convex auth bridge, a Privy P-256 authorization signer, and `.local/generated-auth.env`. Import it with `pnpm convex:env:local`, then set the real Privy App ID, App Secret, access-token verification key, and webhook signing key separately. Never commit `.local`.
 7. Use `pnpm exec convex dev --configure new --dev-deployment local --once` for the first anonymous/local setup, then `pnpm convex:dev` for normal development. The local backend remains available only while that process runs and stores state under `.convex`.
-8. `ALLOW_INSECURE_MOCK_AUTH=true` permits only the hard-coded local mock access token and must never be configured on staging or production. Replace every mock Privy value and set `PRIVY_MODE=live` before live integration.
+8. Ratib has no runtime mock authentication or provider gateway. A missing or invalid Privy credential fails closed in every environment.
 9. Configure the Privy webhook destination as `<PUBLIC_CONVEX_SITE_URL>/webhooks/privy`. Subscribe to intent, wallet-action transfer, transaction, deposit/withdrawal, wallet-security, and MFA events.
 10. Configure Base Sepolia sponsorship if used, fund the treasury with test ETH and Circle Base Sepolia USDC, then complete the opt-in smoke sequence.
+
+## Controlled pilot activation
+
+Set `RATIB_OPERATOR_PRIVY_DIDS` in Convex to the comma-separated DIDs allowed to perform platform activation. From the Convex dashboard, an authenticated platform operator runs these functions in order:
+
+1. `organizations:approvePilot` with the requested organization ID.
+2. `pilotAdmin:configureReviewerQuorum` with the Privy quorum ID and its verified MFA threshold.
+3. The organization owner creates the owner and automation policies in Ratib; Privy remains their authority.
+4. `pilotAdmin:configureAutomationPrincipal` with the registered Privy authorization-key ID. This stores only the public provider identifier, never the private key.
+5. `wallets:provisionPilotWallet` to create the policy-owned treasury after every dependency is present.
 
 ## Live Privy smoke test
 

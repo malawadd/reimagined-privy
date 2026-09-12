@@ -8,11 +8,9 @@ The root `.env` contains browser-safe local values only. `.env.local`, generated
 
 - a 3072-bit RSA signing key and public JWKS for five-minute Convex JWTs;
 - a Privy-compatible P-256 authorization keypair;
-- a valid local Svix-format webhook signing secret;
-- random mock app-secret material; and
-- explicit local-only mock-auth configuration.
+- a Privy-compatible P-256 authorization keypair.
 
-Do not copy the mock app ID, app secret, webhook key, or verification-key placeholder into a real Privy environment. Never commit or share `.local/convex.local.env` or `convex-auth-private.pem`.
+The script does not fabricate provider credentials. The App Secret, access-token verification key, and webhook signing key must come from Privy. Never commit or share `.local/generated-auth.env` or `convex-auth-private.pem`.
 
 ## Values that must come from your Privy account
 
@@ -48,15 +46,13 @@ Get-Clipboard | corepack pnpm exec convex env set PRIVY_JWT_VERIFICATION_KEY --d
 Get-Clipboard | corepack pnpm exec convex env set PRIVY_WEBHOOK_SIGNING_KEY --deployment local
 ```
 
-Set the non-secret backend App ID, switch the gateway to live mode, and disable mock authentication:
+Set the non-secret backend App ID:
 
 ```powershell
 corepack pnpm exec convex env set PRIVY_APP_ID "your-app-id" --deployment local
-corepack pnpm exec convex env set PRIVY_MODE live --deployment local
-corepack pnpm exec convex env remove ALLOW_INSECURE_MOCK_AUTH --deployment local
 ```
 
-Then update `.env` with the matching public App ID and Client ID and set `PUBLIC_PRIVY_MODE=live`.
+Then update `.env` with the matching public App ID and Client ID. Ratib always uses the live provider path.
 
 ## Origins, login, and webhooks
 
