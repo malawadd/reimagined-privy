@@ -1,0 +1,33 @@
+{
+	"reviewedAt": "2026-09-12",
+	"skills": [
+		{
+			"name": "privy",
+			"repository": "https://github.com/privy-io/privy-agentic-wallets-skill",
+			"revision": "7f104aa118a891aca85cfebbd68bf9f4a2cd85e7",
+			"license": "MIT",
+			"path": ".agents/skills/privy"
+		},
+		{
+			"name": "convex",
+			"repository": "https://github.com/get-convex/agent-skills",
+			"revision": "0aa10576821c6928f6a0f498c087af4ee231536e",
+			"license": "Apache-2.0",
+			"path": ".agents/skills/convex"
+		},
+		{
+			"name": "convex-authz",
+			"repository": "https://github.com/get-convex/agent-skills",
+			"revision": "0aa10576821c6928f6a0f498c087af4ee231536e",
+			"license": "Apache-2.0",
+			"path": ".agents/skills/convex-authz"
+		},
+		{
+			"name": "convex-crons",
+			"repository": "https://github.com/get-convex/agent-skills",
+			"revision": "0aa10576821c6928f6a0f498c087af4ee231536e",
+			"license": "Apache-2.0",
+			"path": ".agents/skills/convex-crons"
+		}
+	]
+}

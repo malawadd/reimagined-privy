@@ -1,0 +1,10 @@
+{
+	"id": "event_sanitized_01",
+	"type": "wallet_action.updated",
+	"idempotency_key": "run_sanitized_01",
+	"data": {
+		"wallet_action_id": "wallet_action_sanitized_01",
+		"status": "confirmed",
+		"transaction_hash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+	}
+}

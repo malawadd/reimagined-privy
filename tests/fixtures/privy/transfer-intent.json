@@ -1,0 +1,7 @@
+{
+	"id": "intent_sanitized_01",
+	"type": "TRANSFER",
+	"status": "pending",
+	"authorization": { "required": 2, "approved": 1 },
+	"expires_at": 1789236000
+}

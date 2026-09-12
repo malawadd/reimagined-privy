@@ -1,0 +1,5 @@
+.agents/skills/
+.playwright-cli/
+output/
+test-results/
+pnpm-lock.yaml
