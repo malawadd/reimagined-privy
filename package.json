@@ -1,5 +1,5 @@
 {
-	"name": "privy-b2b-operations-starter",
+	"name": "ratib-finance-os",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
@@ -14,7 +14,7 @@
 		"build:production": "cross-env DEPLOY_ENV=production vite build",
 		"preview": "vite preview",
 		"convex:dev": "convex dev",
-		"convex:env:local": "convex env set --deployment local --from-file .local/convex.local.env --force",
+		"convex:env:local": "convex env set --deployment local --from-file .local/generated-auth.env --force",
 		"convex:deploy": "convex deploy",
 		"privy:smoke": "node scripts/privy-live-smoke.mjs",
 		"keys:generate": "node scripts/generate-auth-keys.mjs",
