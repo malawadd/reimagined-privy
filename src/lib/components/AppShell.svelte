@@ -27,12 +27,18 @@
 		BookOpenCheck,
 		ListChecks,
 		BarChart3,
-		MailPlus
+		MailPlus,
+		Banknote,
+		Calculator,
+		Plug,
+		Code2
 	} from '@lucide/svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 	let mobileOpen = $state(false);
 	let orgMenuOpen = $state(false);
+	let searchQuery = $state('');
+	let searchInput: HTMLInputElement | undefined;
 	let syncStarted = false;
 	const convexAuth = useAuth();
 	const syncCurrentUser = useMutation(api.users.syncCurrent);
@@ -78,7 +84,9 @@
 			items: [
 				{ href: '/app/invoices', label: 'Invoices', icon: FileText },
 				{ href: '/app/payables', label: 'Bills & expenses', icon: ReceiptText },
-				{ href: '/app/batches', label: 'Batches & payroll', icon: Layers3 },
+				{ href: '/app/payouts', label: 'Payouts', icon: Banknote },
+				{ href: '/app/payroll', label: 'Payroll', icon: Layers3 },
+				{ href: '/app/accounting', label: 'Accounting', icon: Calculator },
 				{ href: '/app/reports', label: 'Reports', icon: BarChart3 }
 			]
 		},
@@ -92,7 +100,14 @@
 				{ href: '/app/audit', label: 'Audit log', icon: ScrollText }
 			]
 		},
-		{ label: 'System', items: [{ href: '/app/setup', label: 'Setup', icon: Settings }] }
+		{
+			label: 'System',
+			items: [
+				{ href: '/app/integrations', label: 'Integrations', icon: Plug },
+				{ href: '/app/developers', label: 'Developers', icon: Code2 },
+				{ href: '/app/setup', label: 'Setup', icon: Settings }
+			]
+		}
 	]);
 
 	onMount(async () => {
@@ -115,6 +130,14 @@
 		await privyAuth.logout();
 		await goto('/login');
 	}
+	function runSearch() {
+		const term = searchQuery.trim().toLowerCase();
+		if (!term) return;
+		const match = groups
+			.flatMap((group) => group.items)
+			.find((item) => item.label.toLowerCase().includes(term));
+		if (match) void goto(match.href);
+	}
 	async function accept(id: import('../../convex/_generated/dataModel').Id<'invitations'>) {
 		await acceptInvitation({ invitationId: id });
 	}
@@ -128,6 +151,15 @@
 			.toUpperCase();
 	}
 </script>
+
+<svelte:window
+	onkeydown={(event) => {
+		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+			event.preventDefault();
+			searchInput?.focus();
+		}
+	}}
+/>
 
 <div class="network-banner">
 	<span></span>Base Sepolia testnet <b>·</b> Privy live controls
@@ -211,14 +243,23 @@
 			<button class="mobile-menu" onclick={() => (mobileOpen = !mobileOpen)}>Menu</button>
 			<div class="search">
 				<Search size={16} /><input
+					bind:this={searchInput}
+					bind:value={searchQuery}
 					aria-label="Search"
-					placeholder="Search operations, wallets, people…"
+					placeholder="Jump to a workspace area…"
+					onkeydown={(event) => {
+						if (event.key === 'Enter') runSearch();
+						if (event.key === 'Escape') searchQuery = '';
+					}}
 				/><kbd>⌘ K</kbd>
 			</div>
 			<div class="top-actions">
-				<button aria-label="Notifications"><Bell size={18} /><i></i></button><span class="env-pill"
-					>LIVE DATA</span
-				>
+				<button
+					aria-label="Open pending approvals"
+					title="Pending approvals"
+					onclick={() => goto('/app/approvals')}
+					><Bell size={18} />{#if shellSummary.data?.pendingApprovalCount}<i></i>{/if}</button
+				><span class="env-pill">LIVE DATA</span>
 			</div>
 		</header>
 		<main>

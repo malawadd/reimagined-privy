@@ -86,7 +86,7 @@
 	<section class="hero">
 		<div class="hero-grid" aria-hidden="true"></div>
 		<div class="hero-copy">
-			<p class="hero-kicker"><span></span> Controlled pilot · Base Sepolia</p>
+			<p class="hero-kicker"><span></span> Live development network · Base Sepolia</p>
 			<h1>Ratib</h1>
 			<p class="hero-offer">Finance operations for businesses moving digital assets.</p>
 			<p class="hero-detail">
@@ -231,7 +231,7 @@
 
 <footer class="site-footer">
 	<a class="landing-brand" href="/"><span>R</span><strong>RATIB</strong></a>
-	<p>Digital asset finance operations for controlled-pilot businesses.</p>
+	<p>Digital asset finance operations for modern businesses.</p>
 	<div><a href="/login">Sign in</a><a href="#controls">Security model</a></div>
 </footer>
 

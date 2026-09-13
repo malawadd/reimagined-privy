@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ExternalLink, Plus, ReceiptText, Send, Upload, X } from '@lucide/svelte';
+	import { Check, ExternalLink, Plus, ReceiptText, Send, Upload, X } from '@lucide/svelte';
 	import { useMutation, useQuery } from 'convex-svelte';
 	import { api } from '../../../convex/_generated/api';
 	import type { Id } from '../../../convex/_generated/dataModel';
@@ -17,6 +17,8 @@
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
 	const createPayable = useMutation(api.payables.create);
+	const submitPayable = useMutation(api.payables.submitForApproval);
+	const approvePayable = useMutation(api.payables.approve);
 	const queuePayment = useMutation(api.payables.queuePayment);
 	const generateUploadUrl = useMutation(api.payables.generateReceiptUploadUrl);
 	let tab = $state<'bill' | 'expense'>('bill');
@@ -114,6 +116,31 @@
 			error = caught instanceof Error ? caught.message : 'Unable to queue payment.';
 		}
 	}
+
+	async function submitForApproval(row: NonNullable<typeof payables.data>[number]) {
+		if (!workspace.activeOrganizationId || !sourceWalletId) return;
+		try {
+			await submitPayable({
+				organizationId: workspace.activeOrganizationId,
+				payableId: row.payable._id,
+				walletId: sourceWalletId as Id<'wallets'>
+			});
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to request payable approval.';
+		}
+	}
+
+	async function approve(row: NonNullable<typeof payables.data>[number]) {
+		if (!workspace.activeOrganizationId) return;
+		try {
+			await approvePayable({
+				organizationId: workspace.activeOrganizationId,
+				payableId: row.payable._id
+			});
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to approve payable.';
+		}
+	}
 </script>
 
 <svelte:head><title>Bills and expenses | Ratib</title></svelte:head>
@@ -189,7 +216,15 @@
 								>{#if row.payable.status === 'draft'}<button
 										class="button secondary compact-button"
 										disabled={!sourceWalletId}
-										onclick={() => pay(row)}>Pay <Send size={13} /></button
+										onclick={() => submitForApproval(row)}>Submit <Send size={13} /></button
+									>{:else if row.payable.status === 'pendingApproval'}<button
+										class="button secondary compact-button"
+										onclick={() => approve(row)}>Approve <Check size={13} /></button
+									>{:else if row.payable.status === 'approved' || row.payable.status === 'failed'}<button
+										class="button secondary compact-button"
+										disabled={!sourceWalletId}
+										onclick={() => pay(row)}
+										>{row.payable.status === 'failed' ? 'Retry' : 'Pay'} <Send size={13} /></button
 									>{:else if row.payable.operationId}<a class="text-link" href="/app/approvals"
 										>Track</a
 									>{/if}</td

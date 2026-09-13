@@ -10,6 +10,7 @@
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
 	const createRecipient = useMutation(api.recipients.create);
+	const approveRecipient = useMutation(api.recipients.approve);
 	const revokeRecipient = useMutation(api.recipients.revoke);
 	let query = $state('');
 	let adding = $state(false);
@@ -56,6 +57,16 @@
 			return;
 		await revokeRecipient({ organizationId: workspace.activeOrganizationId, recipientId });
 	}
+
+	async function approve(recipientId: NonNullable<typeof recipients.data>[number]['_id']) {
+		if (!workspace.activeOrganizationId) return;
+		error = null;
+		try {
+			await approveRecipient({ organizationId: workspace.activeOrganizationId, recipientId });
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Unable to approve this counterparty.';
+		}
+	}
 </script>
 
 <svelte:head><title>Counterparties | Ratib</title></svelte:head>
@@ -63,7 +74,7 @@
 <PageHeader
 	eyebrow="PAYMENT DIRECTORY"
 	title="Counterparties"
-	description="Organization-approved EVM destinations used by payment controls and policy-bound automation."
+	description="EVM destinations use maker-checker approval. Automation also requires an attached Privy policy."
 >
 	{#snippet action()}<button class="button primary" onclick={() => (adding = true)}
 			><Plus size={15} /> Add counterparty</button
@@ -80,6 +91,8 @@
 		</p>
 	</div>
 </div>
+
+{#if error && !adding}<p class="form-error" role="alert">{error}</p>{/if}
 
 <section class="panel directory-panel">
 	<header>
@@ -114,8 +127,13 @@
 								>{recipient.address}</td
 							><td>{recipient.assets.join(', ')}</td><td
 								><StatusBadge status={recipient.status} /></td
-							><td
-								>{#if recipient.status === 'approved'}<button
+							><td class="row-actions"
+								>{#if recipient.status === 'pendingApproval'}<button
+										class="icon-button"
+										aria-label={`Approve ${recipient.label}`}
+										title="Approve counterparty"
+										onclick={() => approve(recipient._id)}><Check size={15} /></button
+									>{/if}{#if recipient.status !== 'revoked'}<button
 										class="icon-button danger"
 										aria-label={`Revoke ${recipient.label}`}
 										title="Revoke counterparty"
@@ -136,9 +154,9 @@
 			aria-modal="true"
 			aria-labelledby="counterparty-title"
 		>
-			<p class="eyebrow">APPROVED DESTINATION</p>
+			<p class="eyebrow">DESTINATION REQUEST</p>
 			<h2 id="counterparty-title">Add counterparty</h2>
-			<p>The normalized address is checked for an existing organization entry before approval.</p>
+			<p>A different owner or admin must approve the normalized address before it can be reused.</p>
 			<form
 				onsubmit={(event) => {
 					event.preventDefault();
@@ -167,7 +185,7 @@
 					<button class="button secondary" type="button" onclick={() => (adding = false)}
 						>Cancel</button
 					><button class="button primary" type="submit" disabled={saving}
-						>{saving ? 'Saving…' : 'Approve counterparty'} <Check size={14} /></button
+						>{saving ? 'Saving…' : 'Request approval'} <Check size={14} /></button
 					>
 				</div>
 			</form>
@@ -206,6 +224,11 @@
 	}
 	.icon-button.danger {
 		color: #9b453f;
+	}
+	.row-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 6px;
 	}
 	.modal-backdrop {
 		position: fixed;

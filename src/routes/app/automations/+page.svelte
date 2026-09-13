@@ -105,8 +105,8 @@
 		</div>
 	{:else if automations.data?.length === 0}<div class="automation-empty">
 			<Zap size={25} /><strong>No automations configured</strong><span
-				>A Ratib operator must provision a dedicated service principal and matching Privy signer
-				policy before automation is enabled.</span
+				>Automation becomes available after this organization has an active service principal and an
+				attached Privy policy.</span
 			>
 		</div>
 	{:else}<div class="automation-list">

@@ -75,7 +75,9 @@
 				</div>
 			</div>
 		</div>
-		<footer><span><i></i> Base Sepolia controlled pilot</span><span>Privy + Convex</span></footer>
+		<footer>
+			<span><i></i> Base Sepolia development network</span><span>Privy + Convex</span>
+		</footer>
 	</section>
 
 	<section class="login-panel" aria-labelledby="sign-in-title">
@@ -123,7 +125,7 @@
 			<div class="assurance">
 				<Check size={15} /><span>Short-lived sessions · No passwords · MFA-ready</span>
 			</div>
-			<p class="terms">Access is limited to organizations approved for the controlled pilot.</p>
+			<p class="terms">Create or join an organization after your Privy identity is verified.</p>
 		</div>
 	</section>
 </main>
