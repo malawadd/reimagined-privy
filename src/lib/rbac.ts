@@ -7,6 +7,7 @@ export type Capability =
 	| 'wallet:read'
 	| 'wallet:manage'
 	| 'policy:manage'
+	| 'counterparty:approve'
 	| 'payment:create'
 	| 'approval:read'
 	| 'invoice:read'
@@ -36,6 +37,7 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'wallet:read',
 		'wallet:manage',
 		'policy:manage',
+		'counterparty:approve',
 		'payment:create',
 		'approval:read',
 		'invoice:read',
@@ -63,6 +65,7 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'wallet:read',
 		'wallet:manage',
 		'policy:manage',
+		'counterparty:approve',
 		'payment:create',
 		'approval:read',
 		'invoice:read',
@@ -107,6 +110,7 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 	approver: [
 		'team:read',
 		'wallet:read',
+		'counterparty:approve',
 		'approval:read',
 		'invoice:read',
 		'payable:read',

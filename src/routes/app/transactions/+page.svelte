@@ -106,13 +106,15 @@
 									<dd>{operation.errorCode}</dd>
 								</div>{/if}
 						</dl>
-						{#if ['pendingApproval', 'executing', 'pendingConfirmation'].includes(operation.status)}<button
+						{#if ['queued', 'pendingApproval', 'executing', 'pendingConfirmation'].includes(operation.status) && (operation.status !== 'queued' || operation.errorCode)}<button
 								class="button secondary compact-button"
 								disabled={reconciling === operation._id}
 								onclick={() => reconcile(operation._id)}
 								><RefreshCw size={13} />{reconciling === operation._id
 									? 'Queued…'
-									: 'Reconcile provider'}</button
+									: operation.status === 'queued'
+										? 'Resolve failed attempt'
+										: 'Reconcile provider'}</button
 							>{/if}{#if operation.status === 'pendingApproval'}<a
 								class="button secondary compact-button"
 								href="/app/approvals">Approval inbox <ExternalLink size={13} /></a

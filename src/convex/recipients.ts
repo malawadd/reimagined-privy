@@ -89,7 +89,7 @@ export const approve = mutation({
 	args: { organizationId: v.id('organizations'), recipientId: v.id('recipients') },
 	returns: v.null(),
 	handler: async (ctx, args) => {
-		const { user } = await requireMembership(ctx, args.organizationId, 'policy:manage');
+		const { user } = await requireMembership(ctx, args.organizationId, 'counterparty:approve');
 		const recipient = await ctx.db.get(args.recipientId);
 		assertOrgScoped(recipient, args.organizationId);
 		if (recipient.status !== 'pendingApproval')

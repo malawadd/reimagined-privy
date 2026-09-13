@@ -12,6 +12,7 @@ const input = {
 	schedule: v.optional(v.string()),
 	sourceWalletId: v.optional(v.id('wallets')),
 	destination: v.string(),
+	asset: v.optional(v.union(v.literal('ETH'), v.literal('USDC'))),
 	amount: v.optional(v.string()),
 	policySummary: v.string()
 };
@@ -30,7 +31,7 @@ export const list = query({
 			schedule: v.optional(v.string()),
 			sourceWalletId: v.optional(v.id('wallets')),
 			destination: v.string(),
-			asset: v.literal('USDC'),
+			asset: v.union(v.literal('ETH'), v.literal('USDC')),
 			amount: v.optional(v.string()),
 			nextRunAt: v.optional(v.number()),
 			policySummary: v.string(),
@@ -54,11 +55,14 @@ export const create = mutation({
 		assertOrgScoped(principal, args.organizationId);
 		if (principal.status !== 'active')
 			throw new Error('Select an active automation service principal.');
+		const asset = args.asset ?? 'USDC';
+		if (args.type === 'recurringPayment' && asset !== 'USDC')
+			throw new Error('Recurring automation remains limited to USDC.');
 		return ctx.db.insert('automations', {
 			...args,
 			destination: normalizeEvmAddress(args.destination),
-			amount: args.amount ? normalizeDecimal(args.amount, 6) : undefined,
-			asset: 'USDC',
+			amount: args.amount ? normalizeDecimal(args.amount, asset === 'ETH' ? 18 : 6) : undefined,
+			asset,
 			status: 'active',
 			createdBy: user._id
 		});
@@ -91,7 +95,9 @@ export const update = mutation({
 		await ctx.db.patch(args.automationId, {
 			...(name !== undefined ? { name } : {}),
 			...(args.schedule !== undefined ? { schedule: args.schedule.trim() } : {}),
-			...(args.amount !== undefined ? { amount: normalizeDecimal(args.amount, 6) } : {}),
+			...(args.amount !== undefined
+				? { amount: normalizeDecimal(args.amount, automation.asset === 'ETH' ? 18 : 6) }
+				: {}),
 			...(args.nextRunAt !== undefined ? { nextRunAt: args.nextRunAt } : {}),
 			...(policySummary !== undefined ? { policySummary } : {})
 		});

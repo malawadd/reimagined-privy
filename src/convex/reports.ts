@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import { paginationOptsValidator } from 'convex/server';
 import { query } from './_generated/server';
 import { requireMembership } from './lib/authz';
-import { decimalToUnits, unitsToDecimal } from '../lib/domain';
+import { assetDecimals, decimalToUnits, unitsToDecimal } from '../lib/domain';
 
 const assetTotals = v.object({
 	asset: v.union(v.literal('ETH'), v.literal('USDC')),
@@ -16,6 +16,8 @@ export const financeSummary = query({
 		to: v.number(),
 		inflows: v.array(assetTotals),
 		outflows: v.array(assetTotals),
+		outstandingReceivables: v.array(assetTotals),
+		openPayables: v.array(assetTotals),
 		outstandingReceivablesUsdc: v.string(),
 		openPayablesUsdc: v.string(),
 		operationCount: v.number(),
@@ -65,16 +67,18 @@ export const financeSummary = query({
 			movement[entry.asset][entry.direction === 'debit' ? 'inflow' : 'outflow'] += units;
 		}
 
-		let receivables = 0n;
+		const receivables = { ETH: 0n, USDC: 0n };
 		for (const invoice of invoices) {
 			if (invoice.status === 'void' || invoice.status === 'failed') continue;
-			const remaining = decimalToUnits(invoice.amount, 6) - decimalToUnits(invoice.paidAmount, 6);
-			if (remaining > 0n) receivables += remaining;
+			const decimals = assetDecimals(invoice.asset);
+			const remaining =
+				decimalToUnits(invoice.amount, decimals) - decimalToUnits(invoice.paidAmount, decimals);
+			if (remaining > 0n) receivables[invoice.asset] += remaining;
 		}
-		let openPayables = 0n;
+		const openPayables = { ETH: 0n, USDC: 0n };
 		for (const payable of payables)
 			if (payable.status === 'draft' || payable.status === 'paymentQueued')
-				openPayables += decimalToUnits(payable.amount, 6);
+				openPayables[payable.asset] += decimalToUnits(payable.amount, assetDecimals(payable.asset));
 
 		const periodOperations = operations.filter(
 			(operation) => operation.createdAt >= args.from && operation.createdAt <= args.to
@@ -90,8 +94,16 @@ export const financeSummary = query({
 				{ asset: 'ETH' as const, amount: unitsToDecimal(movement.ETH.outflow.toString(), 18) },
 				{ asset: 'USDC' as const, amount: unitsToDecimal(movement.USDC.outflow.toString(), 6) }
 			],
-			outstandingReceivablesUsdc: unitsToDecimal(receivables.toString(), 6),
-			openPayablesUsdc: unitsToDecimal(openPayables.toString(), 6),
+			outstandingReceivables: [
+				{ asset: 'ETH' as const, amount: unitsToDecimal(receivables.ETH.toString(), 18) },
+				{ asset: 'USDC' as const, amount: unitsToDecimal(receivables.USDC.toString(), 6) }
+			],
+			openPayables: [
+				{ asset: 'ETH' as const, amount: unitsToDecimal(openPayables.ETH.toString(), 18) },
+				{ asset: 'USDC' as const, amount: unitsToDecimal(openPayables.USDC.toString(), 6) }
+			],
+			outstandingReceivablesUsdc: unitsToDecimal(receivables.USDC.toString(), 6),
+			openPayablesUsdc: unitsToDecimal(openPayables.USDC.toString(), 6),
 			operationCount: periodOperations.length,
 			succeededCount: periodOperations.filter((operation) => operation.status === 'succeeded')
 				.length,

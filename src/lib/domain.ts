@@ -40,6 +40,14 @@ export type OperationStatus = (typeof operationStatuses)[number];
 
 export type Asset = 'ETH' | 'USDC';
 
+export function assetDecimals(asset: Asset): 18 | 6 {
+	return asset === 'ETH' ? 18 : 6;
+}
+
+export function normalizeAssetAmount(value: string, asset: Asset): string {
+	return normalizeDecimal(value, assetDecimals(asset));
+}
+
 export interface PaymentDraft {
 	asset: Asset;
 	amount: string;

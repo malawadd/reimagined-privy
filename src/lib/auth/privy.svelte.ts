@@ -125,7 +125,6 @@ class PrivyAuthStore {
 	async authorizeIntent(input: {
 		organizationId: string;
 		intentId: string;
-		expiresAt?: number | null;
 		requestDetails: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; url: string; body?: unknown };
 	}) {
 		if (!this.client) throw new Error('Privy is not initialized.');
@@ -136,7 +135,6 @@ class PrivyAuthStore {
 				appId: env.PUBLIC_PRIVY_APP_ID,
 				intentId: input.intentId,
 				timestamp,
-				expiresAt: input.expiresAt,
 				request: input.requestDetails
 			})
 		);
@@ -147,8 +145,14 @@ class PrivyAuthStore {
 			headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
 			body: JSON.stringify({ ...input, requestDetails: undefined, signature, timestamp })
 		});
-		if (!response.ok)
-			throw new Error('Privy could not accept this approval. Refresh and try again.');
+		if (!response.ok) {
+			const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+			throw new Error(
+				failure?.error === 'invalid_intent_signature'
+					? 'Privy rejected the approval signature. Refresh the intent and approve again.'
+					: 'Privy could not accept this approval. Refresh and try again.'
+			);
+		}
 	}
 
 	async ensurePersonalWallet(excludedWalletIds: string[]) {

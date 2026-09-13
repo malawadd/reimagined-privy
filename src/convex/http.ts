@@ -80,8 +80,16 @@ http.route({
 				accessToken
 			});
 			return json({ ok: true });
-		} catch {
-			return json({ error: 'authorization_failed' }, 400);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : '';
+			return json(
+				{
+					error: message.includes('Invalid signature for intent')
+						? 'invalid_intent_signature'
+						: 'authorization_failed'
+				},
+				400
+			);
 		}
 	})
 });

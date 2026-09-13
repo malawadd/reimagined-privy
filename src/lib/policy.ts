@@ -1,4 +1,5 @@
 import { BASE_SEPOLIA, normalizeDecimal, normalizeEvmAddress } from './domain';
+import type { Asset } from './domain';
 
 export interface PolicyTemplateInput {
 	approvedRecipients: string[];
@@ -126,21 +127,22 @@ export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls'
 	};
 }
 
-export function compileSweepPolicy(treasuryDestination: string) {
+export function compileSweepPolicy(treasuryDestination: string, asset: Asset = 'USDC') {
+	const assetName = asset === 'ETH' ? 'ETH' : 'USDC';
 	return {
 		version: '1.0' as const,
 		chain_type: 'ethereum' as const,
-		name: 'Base Sepolia invoice collection sweep',
+		name: `Base Sepolia ${assetName} invoice collection sweep`,
 		rules: [
 			{
-				name: 'Allow USDC collection sweeps to treasury',
+				name: `Allow ${assetName} collection sweeps to treasury`,
 				method: 'transfer',
 				conditions: [
 					{
 						field_source: 'action_request_body',
 						field: 'source.asset',
 						operator: 'eq',
-						value: 'usdc'
+						value: asset.toLowerCase()
 					},
 					{
 						field_source: 'action_request_body',

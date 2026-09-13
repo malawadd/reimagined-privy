@@ -5,7 +5,7 @@ import { appendAudit } from './lib/audit';
 import { assertOrgScoped, requireMembership } from './lib/authz';
 import { ensureAccountingBook, postSourceJournal } from './lib/accounting';
 import { postOperationEntry } from './lib/ledger';
-import { normalizeDecimal, decimalToUnits, unitsToDecimal } from '../lib/domain';
+import { assetDecimals, normalizeDecimal, decimalToUnits, unitsToDecimal } from '../lib/domain';
 import { reverseJournalLines, validateJournalLines } from '../lib/accounting';
 
 const lineInput = v.object({
@@ -488,6 +488,16 @@ export const runReconciliation = mutation({
 		for (const operation of operations) {
 			const sourceKey = `operation:${operation._id}`;
 			if (journalSources.has(sourceKey)) continue;
+			if (operation.asset === 'ETH') {
+				const valuationCase = await ctx.db
+					.query('reconciliationCases')
+					.withIndex('by_org_status', (q) =>
+						q.eq('organizationId', args.organizationId).eq('status', 'open')
+					)
+					.filter((q) => q.eq(q.field('sourceId'), sourceKey))
+					.first();
+				if (valuationCase?.kind === 'missingValuation') continue;
+			}
 			await ctx.db.insert('reconciliationCases', {
 				organizationId: args.organizationId,
 				runId,
@@ -617,7 +627,7 @@ export const backfillLegacyPage = mutation({
 					sourceKey,
 					sourceType: 'invoice',
 					amount: invoice.amount,
-					asset: 'USDC',
+					asset: invoice.asset,
 					postingDate: invoice.createdAt,
 					description: `Invoice ${invoice.invoiceNumber} issued`
 				});
@@ -641,7 +651,7 @@ export const backfillLegacyPage = mutation({
 					sourceKey,
 					sourceType: 'payable',
 					amount: payable.amount,
-					asset: 'USDC',
+					asset: payable.asset,
 					postingDate: payable.updatedAt,
 					description: `${payable.type === 'bill' ? 'Bill' : 'Expense'} ${payable.reference} approved`
 				});
@@ -665,15 +675,16 @@ export const backfillLegacyPage = mutation({
 					.query('invoicePayments')
 					.withIndex('by_invoice', (q) => q.eq('invoiceId', invoice._id))
 					.take(500);
+				const decimals = assetDecimals(payment.asset);
 				const prior = siblings
 					.filter(
 						(item) =>
 							item.receivedAt < payment.receivedAt ||
 							(item.receivedAt === payment.receivedAt && String(item._id) < String(payment._id))
 					)
-					.reduce((sum, item) => sum + decimalToUnits(item.amount, 6), 0n);
-				const amount = decimalToUnits(payment.amount, 6);
-				const outstanding = decimalToUnits(invoice.amount, 6) - prior;
+					.reduce((sum, item) => sum + decimalToUnits(item.amount, decimals), 0n);
+				const amount = decimalToUnits(payment.amount, decimals);
+				const outstanding = decimalToUnits(invoice.amount, decimals) - prior;
 				const applied = outstanding > 0n ? (amount < outstanding ? amount : outstanding) : 0n;
 				const excess = amount - applied;
 				await postSourceJournal(ctx, {
@@ -681,12 +692,12 @@ export const backfillLegacyPage = mutation({
 					sourceKey,
 					sourceType: 'invoicePayment',
 					amount: payment.amount,
-					asset: 'USDC',
+					asset: payment.asset,
 					postingDate: payment.receivedAt,
 					description: `Invoice ${invoice.invoiceNumber} collection`,
 					walletId: payment.walletId,
-					receivableAmount: unitsToDecimal(applied.toString(), 6),
-					customerDepositAmount: unitsToDecimal(excess.toString(), 6)
+					receivableAmount: unitsToDecimal(applied.toString(), decimals),
+					customerDepositAmount: unitsToDecimal(excess.toString(), decimals)
 				});
 				if (before) skipped += 1;
 				else posted += 1;

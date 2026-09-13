@@ -10,7 +10,7 @@
 		WalletCards,
 		X
 	} from '@lucide/svelte';
-	import { useMutation, useQuery } from 'convex-svelte';
+	import { useAction, useMutation, useQuery } from 'convex-svelte';
 	import { api } from '../../../convex/_generated/api';
 	import type { Id } from '../../../convex/_generated/dataModel';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -38,7 +38,7 @@
 	const setAssignment = useMutation(api.walletAssignments.set);
 	const syncPersonalWallet = useMutation(api.payroll.syncPersonalWallet);
 	const createChallenge = useMutation(api.payroll.createExternalChallenge);
-	const verifyDestination = useMutation(api.payroll.verifyExternalDestination);
+	const verifyDestination = useAction(api.payrollActions.verifyExternalDestination);
 	const setEligibility = useMutation(api.payroll.setEligibility);
 
 	let showInvite = $state(false);
@@ -51,7 +51,17 @@
 	let assignmentWallet = $state('');
 	let assignmentPermissions = $state<string[]>(['view']);
 	let externalAddress = $state('');
+	let connectedExternalAddress = $state('');
 	const permissions = ['view', 'initiate', 'approve', 'manage'] as const;
+	type EvmProvider = {
+		isMetaMask?: boolean;
+		providers?: EvmProvider[];
+		request(input: { method: string; params?: unknown[] }): Promise<unknown>;
+	};
+	function getMetaMaskProvider() {
+		const injected = (window as Window & { ethereum?: EvmProvider }).ethereum;
+		return injected?.providers?.find((provider) => provider.isMetaMask) ?? injected;
+	}
 	function userError(caught: unknown, fallback: string) {
 		if (!(caught instanceof Error)) return fallback;
 		return (
@@ -169,24 +179,43 @@
 			busy = false;
 		}
 	}
+	async function connectExternal() {
+		busy = true;
+		error = null;
+		try {
+			const ethereum = getMetaMaskProvider();
+			if (!ethereum)
+				throw new Error(
+					'MetaMask is not available in this browser. Open Ratib in a browser where MetaMask is installed.'
+				);
+			const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+			const address = Array.isArray(accounts) && typeof accounts[0] === 'string' ? accounts[0] : '';
+			if (!address) throw new Error('MetaMask did not return an account.');
+			connectedExternalAddress = address;
+			externalAddress = address;
+		} catch (c) {
+			error = userError(c, 'Unable to connect MetaMask.');
+		} finally {
+			busy = false;
+		}
+	}
 	async function verifyExternal() {
 		if (!workspace.activeOrganizationId) return;
 		busy = true;
 		error = null;
 		try {
-			const ethereum = (
-				window as Window & {
-					ethereum?: { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
-				}
-			).ethereum;
-			if (!ethereum) throw new Error('Connect an EVM wallet extension to verify this address.');
+			const ethereum = getMetaMaskProvider();
+			if (!ethereum || !connectedExternalAddress)
+				throw new Error('Connect MetaMask before verifying ownership.');
+			if (connectedExternalAddress.toLowerCase() !== externalAddress.trim().toLowerCase())
+				throw new Error('The entered address must match the connected MetaMask account.');
 			const challenge = await createChallenge({
 				organizationId: workspace.activeOrganizationId,
-				address: externalAddress
+				address: connectedExternalAddress
 			});
 			const signature = await ethereum.request({
 				method: 'personal_sign',
-				params: [challenge.message, externalAddress]
+				params: [challenge.message, connectedExternalAddress]
 			});
 			if (typeof signature !== 'string') throw new Error('The wallet did not return a signature.');
 			await verifyDestination({
@@ -195,6 +224,7 @@
 				signature
 			});
 			externalAddress = '';
+			connectedExternalAddress = '';
 		} catch (c) {
 			error = userError(c, 'Unable to verify wallet.');
 		} finally {
@@ -355,6 +385,14 @@
 			<button class="button secondary" onclick={createPersonal} disabled={busy}
 				><WalletCards size={14} /> Create or use Ratib wallet</button
 			>
+			<div class="wallet-connect-row">
+				<button class="button secondary" type="button" onclick={connectExternal} disabled={busy}
+					><WalletCards size={14} /> Connect MetaMask</button
+				>
+				{#if connectedExternalAddress}<span
+						>Connected {connectedExternalAddress.slice(0, 8)}…{connectedExternalAddress.slice(-6)}</span
+					>{/if}
+			</div>
 			<form
 				onsubmit={(e) => {
 					e.preventDefault();
@@ -530,6 +568,16 @@
 	}
 	.payout > .button {
 		width: fit-content;
+	}
+	.wallet-connect-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.wallet-connect-row span {
+		color: #397563;
+		font: 0.64rem var(--font-mono);
+		font-weight: 750;
 	}
 	.payout form div {
 		display: flex;

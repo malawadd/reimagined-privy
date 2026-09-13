@@ -18,7 +18,7 @@ export const createOperation = internalMutation({
 			kind: 'automationRun',
 			status: 'executing',
 			approvalPath: 'automationSigner',
-			asset: 'USDC',
+			asset: automation.asset,
 			amount,
 			destination: automation.destination,
 			reference: automation.name,

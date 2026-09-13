@@ -3,6 +3,7 @@ import { internalMutation, internalQuery } from './_generated/server';
 import type { GenericMutationCtx, GenericQueryCtx } from 'convex/server';
 import { internal } from './_generated/api';
 import {
+	assetDecimals,
 	decimalToUnits,
 	normalizeDecimal,
 	normalizeEvmAddress,
@@ -335,19 +336,21 @@ export const getReport = internalQuery({
 			const units = decimalToUnits(entry.amount, entry.asset === 'USDC' ? 6 : 18);
 			movement[entry.asset][entry.direction === 'debit' ? 'inflow' : 'outflow'] += units;
 		}
-		let receivables = 0n;
+		const receivables = { ETH: 0n, USDC: 0n };
 		for (const invoice of invoices) {
 			if (allowed.size > 0 && !allowed.has(invoice.treasuryWalletId)) continue;
 			if (invoice.status === 'void' || invoice.status === 'failed') continue;
-			const remaining = decimalToUnits(invoice.amount, 6) - decimalToUnits(invoice.paidAmount, 6);
-			if (remaining > 0n) receivables += remaining;
+			const decimals = assetDecimals(invoice.asset);
+			const remaining =
+				decimalToUnits(invoice.amount, decimals) - decimalToUnits(invoice.paidAmount, decimals);
+			if (remaining > 0n) receivables[invoice.asset] += remaining;
 		}
-		let openPayables = 0n;
+		const openPayables = { ETH: 0n, USDC: 0n };
 		for (const payable of payables) {
 			const sourceWalletId = await payableSourceWalletId(ctx, payable);
 			if (allowed.size > 0 && (!sourceWalletId || !allowed.has(sourceWalletId))) continue;
 			if (OPEN_PAYABLE_STATUSES.has(payable.status))
-				openPayables += decimalToUnits(payable.amount, 6);
+				openPayables[payable.asset] += decimalToUnits(payable.amount, assetDecimals(payable.asset));
 		}
 		return {
 			period: { from: new Date(from).toISOString(), to: new Date(to).toISOString(), days: 30 },
@@ -359,8 +362,16 @@ export const getReport = internalQuery({
 				{ asset: 'ETH', amount: unitsToDecimal(movement.ETH.outflow.toString(), 18) },
 				{ asset: 'USDC', amount: unitsToDecimal(movement.USDC.outflow.toString(), 6) }
 			],
-			outstandingReceivablesUsdc: unitsToDecimal(receivables.toString(), 6),
-			openPayablesUsdc: unitsToDecimal(openPayables.toString(), 6),
+			outstandingReceivables: [
+				{ asset: 'ETH', amount: unitsToDecimal(receivables.ETH.toString(), 18) },
+				{ asset: 'USDC', amount: unitsToDecimal(receivables.USDC.toString(), 6) }
+			],
+			openPayables: [
+				{ asset: 'ETH', amount: unitsToDecimal(openPayables.ETH.toString(), 18) },
+				{ asset: 'USDC', amount: unitsToDecimal(openPayables.USDC.toString(), 6) }
+			],
+			outstandingReceivablesUsdc: unitsToDecimal(receivables.USDC.toString(), 6),
+			openPayablesUsdc: unitsToDecimal(openPayables.USDC.toString(), 6),
 			operationCount: visibleOperations.length,
 			succeededCount: visibleOperations.filter((operation) => operation.status === 'succeeded')
 				.length,

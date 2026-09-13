@@ -43,7 +43,6 @@
 			await privyAuth.authorizeIntent({
 				organizationId: workspace.activeOrganizationId,
 				intentId: approval.intentId,
-				expiresAt: approval.expiresAt,
 				requestDetails: approval.requestDetails
 			});
 			await refreshApproval({

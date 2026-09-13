@@ -117,7 +117,7 @@ export const rebuildMissing = mutation({
 				sourceId: payment._id,
 				debitAccount: `Wallet:collection:${payment.walletId}`,
 				creditAccount: 'Accounts receivable',
-				asset: 'USDC',
+				asset: payment.asset,
 				amount: payment.amount,
 				transactionHash: payment.transactionHash,
 				occurredAt: payment.receivedAt

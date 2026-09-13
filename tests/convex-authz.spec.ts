@@ -286,6 +286,102 @@ describe('Convex tenant authorization', () => {
 		});
 	});
 
+	it('reconciles an ETH invoice deposit with 18-decimal precision exactly once', async () => {
+		const t = convexTest(schema, modules);
+		const ids = await t.run(async (ctx) => {
+			const userId = await ctx.db.insert('users', {
+				privyDid: 'did:privy:eth-invoice-owner',
+				lastSeenAt: Date.now()
+			});
+			const organizationId = await ctx.db.insert('organizations', {
+				name: 'ETH Invoice Co',
+				slug: 'eth-invoice-co',
+				createdByUserId: userId,
+				active: true
+			});
+			const treasuryWalletId = await ctx.db.insert('wallets', {
+				organizationId,
+				privyWalletId: 'wallet_eth_treasury',
+				name: 'Treasury',
+				address: '0x0000000000000000000000000000000000000001',
+				chainType: 'ethereum',
+				chainId: 84532,
+				ownerQuorumId: 'quorum_eth_invoice',
+				signerIds: [],
+				policyIds: [],
+				syncVersion: 1,
+				syncedAt: Date.now(),
+				purpose: 'treasury'
+			});
+			const invoiceId = await ctx.db.insert('invoices', {
+				organizationId,
+				invoiceNumber: 'INV-ETH-1',
+				customerName: 'Customer',
+				asset: 'ETH',
+				amount: '0.0004',
+				paidAmount: '0',
+				dueAt: Date.now() + 86_400_000,
+				status: 'issued',
+				lineItems: [{ description: 'Service', quantity: '1', unitAmount: '0.0004' }],
+				treasuryWalletId,
+				publicTokenHash: 'b'.repeat(64),
+				publicTokenCreatedAt: Date.now(),
+				createdBy: userId,
+				createdAt: Date.now(),
+				updatedAt: Date.now()
+			});
+			const collectionWalletId = await ctx.db.insert('wallets', {
+				organizationId,
+				privyWalletId: 'wallet_eth_invoice',
+				name: 'Invoice INV-ETH-1',
+				address: '0x0000000000000000000000000000000000000002',
+				chainType: 'ethereum',
+				chainId: 84532,
+				ownerQuorumId: 'quorum_eth_invoice',
+				signerIds: [],
+				policyIds: [],
+				syncVersion: 1,
+				syncedAt: Date.now(),
+				purpose: 'collection',
+				invoiceId
+			});
+			await ctx.db.patch(invoiceId, { collectionWalletId });
+			const receiptId = await ctx.db.insert('webhookReceipts', {
+				svixMessageId: 'msg_eth_invoice_deposit',
+				payloadIdempotencyKey: 'deposit-eth-1',
+				eventType: 'wallet.funds_deposited',
+				payload: {
+					type: 'wallet.funds_deposited',
+					wallet_id: 'wallet_eth_invoice',
+					idempotency_key: 'deposit-eth-1',
+					caip2: 'eip155:84532',
+					asset: 'eth',
+					amount: '400000000000000',
+					transaction_hash: '0xethdeposit'
+				},
+				receivedAt: Date.now()
+			});
+			return { invoiceId, receiptId };
+		});
+		await t.mutation(internal.webhookProcessing.processReceipt, { receiptId: ids.receiptId });
+		await t.mutation(internal.webhookProcessing.processReceipt, { receiptId: ids.receiptId });
+		const result = await t.run(async (ctx) => ({
+			invoice: await ctx.db.get(ids.invoiceId),
+			payments: await ctx.db.query('invoicePayments').collect(),
+			ledger: await ctx.db.query('ledgerEntries').collect(),
+			cases: await ctx.db.query('reconciliationCases').collect()
+		}));
+		expect(result.invoice).toMatchObject({ paidAmount: '0.0004', status: 'paid' });
+		expect(result.payments).toHaveLength(1);
+		expect(result.payments[0]).toMatchObject({ asset: 'ETH', amount: '0.0004' });
+		expect(result.ledger).toContainEqual(
+			expect.objectContaining({ asset: 'ETH', amount: '0.0004' })
+		);
+		expect(result.cases).toContainEqual(
+			expect.objectContaining({ kind: 'missingValuation', sourceType: 'invoicePayment' })
+		);
+	});
+
 	it('accepts an invitation only for the server-verified Privy email', async () => {
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity({ subject: 'did:privy:invite-owner', email: 'owner@example.com' });

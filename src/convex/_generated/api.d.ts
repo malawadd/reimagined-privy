@@ -52,6 +52,7 @@ import type * as payoutAttemptState from "../payoutAttemptState.js";
 import type * as payoutExecution from "../payoutExecution.js";
 import type * as payouts from "../payouts.js";
 import type * as payroll from "../payroll.js";
+import type * as payrollActions from "../payrollActions.js";
 import type * as personalWalletActions from "../personalWalletActions.js";
 import type * as policies from "../policies.js";
 import type * as privy_events from "../privy/events.js";
@@ -120,6 +121,7 @@ declare const fullApi: ApiFromModules<{
   payoutExecution: typeof payoutExecution;
   payouts: typeof payouts;
   payroll: typeof payroll;
+  payrollActions: typeof payrollActions;
   personalWalletActions: typeof personalWalletActions;
   policies: typeof policies;
   "privy/events": typeof privy_events;

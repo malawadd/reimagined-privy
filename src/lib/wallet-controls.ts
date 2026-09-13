@@ -46,7 +46,6 @@ export function privyIntentSignaturePayload(input: {
 	appId: string;
 	intentId: string;
 	timestamp: number;
-	expiresAt?: number | null;
 	request: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; url: string; body?: unknown };
 }) {
 	return {
@@ -56,10 +55,7 @@ export function privyIntentSignaturePayload(input: {
 		body: input.request.body ?? {},
 		timestamp: input.timestamp,
 		intent_id: input.intentId,
-		headers: {
-			'privy-app-id': input.appId,
-			...(input.expiresAt ? { 'privy-request-expiry': String(input.expiresAt) } : {})
-		}
+		headers: { 'privy-app-id': input.appId }
 	};
 }
 

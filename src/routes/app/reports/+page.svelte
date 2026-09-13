@@ -30,8 +30,10 @@
 			['Inflows', 'ETH', total(summary.data.inflows, 'ETH')],
 			['Outflows', 'USDC', total(summary.data.outflows, 'USDC')],
 			['Outflows', 'ETH', total(summary.data.outflows, 'ETH')],
-			['Outstanding receivables', 'USDC', summary.data.outstandingReceivablesUsdc],
-			['Open payables', 'USDC', summary.data.openPayablesUsdc]
+			['Outstanding receivables', 'USDC', total(summary.data.outstandingReceivables, 'USDC')],
+			['Outstanding receivables', 'ETH', total(summary.data.outstandingReceivables, 'ETH')],
+			['Open payables', 'USDC', total(summary.data.openPayables, 'USDC')],
+			['Open payables', 'ETH', total(summary.data.openPayables, 'ETH')]
 		];
 		const blob = new Blob(
 			[rows.map((row) => row.map((value) => `"${value}"`).join(',')).join('\r\n')],
@@ -102,16 +104,15 @@
 		</div>
 		<div class="metric">
 			<div>
-				<span>Receivables</span><strong>{summary.data.outstandingReceivablesUsdc}</strong><small
-					>Outstanding USDC invoices</small
-				>
+				<span>Receivables</span><strong
+					>{total(summary.data.outstandingReceivables, 'ETH')} ETH</strong
+				><small>{total(summary.data.outstandingReceivables, 'USDC')} USDC outstanding</small>
 			</div>
 		</div>
 		<div class="metric">
 			<div>
-				<span>Open payables</span><strong>{summary.data.openPayablesUsdc}</strong><small
-					>Draft and queued USDC</small
-				>
+				<span>Open payables</span><strong>{total(summary.data.openPayables, 'ETH')} ETH</strong
+				><small>{total(summary.data.openPayables, 'USDC')} USDC open</small>
 			</div>
 		</div>
 	</section>

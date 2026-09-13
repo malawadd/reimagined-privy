@@ -47,7 +47,9 @@ export const getAutomationBundle = internalQuery({
 		run: v.any(),
 		automation: v.any(),
 		principal: v.any(),
-		wallet: walletDocumentValidator
+		wallet: walletDocumentValidator,
+		organization: v.any(),
+		policies: v.array(v.any())
 	}),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.runId);
@@ -63,12 +65,21 @@ export const getAutomationBundle = internalQuery({
 					.query('wallets')
 					.withIndex('by_org', (q) => q.eq('organizationId', automation.organizationId))
 					.first();
-		if (!principal || !wallet) throw new Error('Automation dependencies are missing.');
+		const [organization, policies] = await Promise.all([
+			ctx.db.get(run.organizationId),
+			ctx.db
+				.query('policies')
+				.withIndex('by_org', (q) => q.eq('organizationId', run.organizationId))
+				.take(100)
+		]);
+		if (!principal || !wallet || !organization)
+			throw new Error('Automation dependencies are missing.');
+		if (!organization.active) throw new Error('Automation organization is inactive.');
 		if (principal.organizationId !== run.organizationId || principal.status !== 'active')
 			throw new Error('Automation service principal is invalid or revoked.');
 		if (wallet.organizationId !== run.organizationId)
 			throw new Error('Automation source wallet is outside the organization.');
-		return { run, automation, principal, wallet };
+		return { run, automation, principal, wallet, organization, policies };
 	}
 });
 export const getWallet = internalQuery({

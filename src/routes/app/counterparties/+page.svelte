@@ -129,10 +129,10 @@
 								><StatusBadge status={recipient.status} /></td
 							><td class="row-actions"
 								>{#if recipient.status === 'pendingApproval'}<button
-										class="icon-button"
+										class="button secondary compact"
 										aria-label={`Approve ${recipient.label}`}
 										title="Approve counterparty"
-										onclick={() => approve(recipient._id)}><Check size={15} /></button
+										onclick={() => approve(recipient._id)}><Check size={15} /> Approve</button
 									>{/if}{#if recipient.status !== 'revoked'}<button
 										class="icon-button danger"
 										aria-label={`Revoke ${recipient.label}`}

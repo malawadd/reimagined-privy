@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileOwnerPolicy, compileTreasuryPolicy } from './policy';
+import { compileOwnerPolicy, compileSweepPolicy, compileTreasuryPolicy } from './policy';
 
 describe('policy compiler', () => {
 	it('uses Privy transfer-action fields and binds the signer to Base Sepolia USDC', () => {
@@ -27,5 +27,20 @@ describe('policy compiler', () => {
 		expect(policy.rules).toHaveLength(2);
 		expect(policy.rules.map((rule) => rule.method)).toEqual(['transfer', 'transfer']);
 		expect(policy.rules.map((rule) => rule.conditions[0].value)).toEqual(['eth', 'usdc']);
+	});
+
+	it('compiles an ETH collection sweep for only the configured treasury', () => {
+		const policy = compileSweepPolicy('0x2222222222222222222222222222222222222222', 'ETH');
+		expect(policy.rules[0]).toMatchObject({
+			method: 'transfer',
+			action: 'ALLOW',
+			conditions: expect.arrayContaining([
+				expect.objectContaining({ field: 'source.asset', value: 'eth' }),
+				expect.objectContaining({
+					field: 'destination.address',
+					value: '0x2222222222222222222222222222222222222222'
+				})
+			])
+		});
 	});
 });

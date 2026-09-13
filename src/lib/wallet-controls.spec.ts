@@ -85,13 +85,12 @@ describe('Privy provisioning inputs', () => {
 		expect(privyUserIdsEqual('did:privy:one', 'two')).toBe(false);
 	});
 
-	it('binds intent signatures to the intent, signing time, and original request expiry', () => {
+	it('binds the underlying Privy request signature to its intent and timestamp', () => {
 		expect(
 			privyIntentSignaturePayload({
 				appId: 'app-id',
 				intentId: 'intent-id',
-				timestamp: 1_789_224_246_000,
-				expiresAt: 1_789_478_386_246,
+				timestamp: 1_789_561_852_861,
 				request: {
 					method: 'PATCH',
 					url: 'https://api.privy.io/v1/wallets/wallet-id',
@@ -103,12 +102,9 @@ describe('Privy provisioning inputs', () => {
 			method: 'PATCH',
 			url: 'https://api.privy.io/v1/wallets/wallet-id',
 			body: { display_name: 'Operating Treasury' },
-			timestamp: 1_789_224_246_000,
+			timestamp: 1_789_561_852_861,
 			intent_id: 'intent-id',
-			headers: {
-				'privy-app-id': 'app-id',
-				'privy-request-expiry': '1789478386246'
-			}
+			headers: { 'privy-app-id': 'app-id' }
 		});
 	});
 });

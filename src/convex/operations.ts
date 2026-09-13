@@ -4,6 +4,7 @@ import { requireMembership, assertOrgScoped, requireWalletPermission } from './l
 import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../lib/domain';
 import { internal } from './_generated/api';
 import { appendAudit } from './lib/audit';
+import { isStoredDefinitiveProviderRejection } from '../lib/provider-errors';
 import { operationDocumentValidator } from './lib/validators';
 import { activeAutomationPolicyAllows, payoutAttemptKey } from '../lib/payout-domain';
 
@@ -186,6 +187,20 @@ export const reconcile = mutation({
 		await requireMembership(ctx, args.organizationId, 'wallet:read');
 		const operation = await ctx.db.get(args.operationId);
 		assertOrgScoped(operation, args.organizationId);
+		if (operation.status === 'queued' && isStoredDefinitiveProviderRejection(operation.errorCode)) {
+			const attempt = await ctx.db
+				.query('providerAttempts')
+				.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
+				.order('desc')
+				.first();
+			if (attempt?.status === 'ambiguous') {
+				await ctx.scheduler.runAfter(0, internal.payoutAttemptState.markFailed, {
+					attemptId: attempt._id,
+					errorCode: operation.errorCode
+				});
+				return null;
+			}
+		}
 		await ctx.scheduler.runAfter(0, internal.privyActions.reconcileOperation, {
 			operationId: args.operationId
 		});
