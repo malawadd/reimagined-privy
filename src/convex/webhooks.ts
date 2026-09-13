@@ -44,3 +44,23 @@ export const verifyAndStore = internalAction({
 		});
 	}
 });
+
+export const processSafely = internalAction({
+	args: { receiptId: v.id('webhookReceipts') },
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		try {
+			await ctx.runMutation(internal.webhookProcessing.processReceipt, args);
+		} catch (error) {
+			const code =
+				error instanceof Error
+					? error.message.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 120)
+					: 'webhook_processing_failed';
+			await ctx.runMutation(internal.webhookProcessing.markProcessed, {
+				receiptId: args.receiptId,
+				error: code
+			});
+		}
+		return null;
+	}
+});

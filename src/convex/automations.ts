@@ -52,6 +52,8 @@ export const create = mutation({
 		const { user } = await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const principal = await ctx.db.get(args.servicePrincipalId);
 		assertOrgScoped(principal, args.organizationId);
+		if (principal.status !== 'active')
+			throw new Error('Select an active automation service principal.');
 		return ctx.db.insert('automations', {
 			...args,
 			destination: normalizeEvmAddress(args.destination),
@@ -77,6 +79,9 @@ export const update = mutation({
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
+		const principal = await ctx.db.get(automation.servicePrincipalId);
+		assertOrgScoped(principal, args.organizationId);
+		if (principal.status !== 'active') throw new Error('The automation signer is revoked.');
 		const name = args.name?.trim();
 		const policySummary = args.policySummary?.trim();
 		if (name !== undefined && (!name || name.length > 80))
@@ -111,6 +116,9 @@ export const resume = mutation({
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
+		const principal = await ctx.db.get(automation.servicePrincipalId);
+		assertOrgScoped(principal, args.organizationId);
+		if (principal.status !== 'active') throw new Error('The automation signer is revoked.');
 		await ctx.db.patch(args.automationId, { status: 'active' });
 		return null;
 	}
@@ -122,6 +130,11 @@ export const runNow = mutation({
 		await requireMembership(ctx, args.organizationId, 'automation:manage');
 		const automation = await ctx.db.get(args.automationId);
 		assertOrgScoped(automation, args.organizationId);
+		if (automation.status !== 'active')
+			throw new Error('Resume this automation before running it.');
+		const principal = await ctx.db.get(automation.servicePrincipalId);
+		assertOrgScoped(principal, args.organizationId);
+		if (principal.status !== 'active') throw new Error('The automation signer is revoked.');
 		const scheduledFor = Date.now();
 		const runKey = deterministicRunKey(args.automationId, scheduledFor);
 		const existing = await ctx.db

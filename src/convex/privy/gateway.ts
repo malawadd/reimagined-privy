@@ -36,6 +36,7 @@ export interface PrivyGateway {
 		asset: 'ETH' | 'USDC';
 		amount: string;
 		destination: string;
+		idempotencyKey: string;
 	}): Promise<unknown>;
 	requestWalletUpdate(walletId: string, update: Record<string, unknown>): Promise<unknown>;
 	requestPolicyUpdate(policyId: string, update: Record<string, unknown>): Promise<unknown>;
@@ -178,15 +179,20 @@ export class LivePrivyGateway implements PrivyGateway {
 		asset: 'ETH' | 'USDC';
 		amount: string;
 		destination: string;
+		idempotencyKey: string;
 	}) {
-		return this.client.intents().transfer(input.walletId, {
-			source: {
-				asset: input.asset.toLowerCase(),
-				amount: input.amount,
-				chain: BASE_SEPOLIA.transferChain
-			},
-			destination: { address: input.destination }
-		} as never);
+		return this.client.intents().transfer(
+			input.walletId,
+			{
+				source: {
+					asset: input.asset.toLowerCase(),
+					amount: input.amount,
+					chain: BASE_SEPOLIA.transferChain
+				},
+				destination: { address: input.destination }
+			} as never,
+			{ idempotencyKey: input.idempotencyKey, maxRetries: 0 }
+		);
 	}
 
 	requestWalletUpdate(walletId: string, update: Record<string, unknown>) {

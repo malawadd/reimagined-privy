@@ -54,6 +54,8 @@ export const getAutomationBundle = internalQuery({
 		if (!run) throw new Error('Run not found.');
 		const automation = await ctx.db.get(run.automationId);
 		if (!automation) throw new Error('Automation not found.');
+		if (automation.organizationId !== run.organizationId)
+			throw new Error('Automation organization mismatch.');
 		const principal = await ctx.db.get(automation.servicePrincipalId);
 		const wallet = automation.sourceWalletId
 			? await ctx.db.get(automation.sourceWalletId)
@@ -62,6 +64,10 @@ export const getAutomationBundle = internalQuery({
 					.withIndex('by_org', (q) => q.eq('organizationId', automation.organizationId))
 					.first();
 		if (!principal || !wallet) throw new Error('Automation dependencies are missing.');
+		if (principal.organizationId !== run.organizationId || principal.status !== 'active')
+			throw new Error('Automation service principal is invalid or revoked.');
+		if (wallet.organizationId !== run.organizationId)
+			throw new Error('Automation source wallet is outside the organization.');
 		return { run, automation, principal, wallet };
 	}
 });

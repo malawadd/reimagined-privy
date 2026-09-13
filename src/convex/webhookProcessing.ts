@@ -52,7 +52,7 @@ export const insertReceipt = internalMutation({
 			if (samePayload) return { duplicate: true, receiptId: samePayload._id };
 		}
 		const receiptId = await ctx.db.insert('webhookReceipts', { ...args, receivedAt: Date.now() });
-		await ctx.scheduler.runAfter(0, internal.webhookProcessing.processReceipt, { receiptId });
+		await ctx.scheduler.runAfter(0, internal.webhooks.processSafely, { receiptId });
 		return { duplicate: false, receiptId };
 	}
 });
@@ -187,6 +187,14 @@ export const processReceipt = internalMutation({
 						});
 						const paidUnits = decimalToUnits(invoice.paidAmount, 6) + decimalToUnits(amount, 6);
 						const invoiceUnits = decimalToUnits(invoice.amount, 6);
+						const incomingUnits = decimalToUnits(amount, 6);
+						const outstandingUnits =
+							invoiceUnits > decimalToUnits(invoice.paidAmount, 6)
+								? invoiceUnits - decimalToUnits(invoice.paidAmount, 6)
+								: 0n;
+						const receivableUnits =
+							incomingUnits < outstandingUnits ? incomingUnits : outstandingUnits;
+						const depositUnits = incomingUnits - receivableUnits;
 						const nextStatus =
 							invoice.status === 'void'
 								? 'void'
@@ -212,6 +220,8 @@ export const processReceipt = internalMutation({
 								creditAccount: 'Accounts receivable',
 								asset: 'USDC',
 								amount,
+								receivableAmount: unitsToDecimal(receivableUnits.toString(), 6),
+								customerDepositAmount: unitsToDecimal(depositUnits.toString(), 6),
 								transactionHash,
 								occurredAt: Date.now()
 							});

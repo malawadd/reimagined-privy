@@ -4,6 +4,8 @@ import { internal } from './_generated/api';
 import { assertOrgScoped, requireMembership } from './lib/authz';
 import { appendAudit } from './lib/audit';
 import { getAddress, verifyMessage } from 'viem';
+import type { GenericMutationCtx } from 'convex/server';
+import type { DataModel, Id } from './_generated/dataModel';
 
 export const listProfiles = query({
 	args: { organizationId: v.id('organizations') },
@@ -97,6 +99,7 @@ export const savePersonalWallet = internalMutation({
 		if (organizationWallets.some((wallet) => wallet.privyWalletId === args.privyWalletId))
 			throw new Error('An organization treasury cannot be used as a personal payout wallet.');
 		const address = getAddress(args.address);
+		const verifiedAt = Date.now();
 		let wallet = await ctx.db
 			.query('personalWallets')
 			.withIndex('by_org_user', (q) =>
@@ -107,8 +110,8 @@ export const savePersonalWallet = internalMutation({
 			await ctx.db.patch(wallet._id, {
 				privyWalletId: args.privyWalletId,
 				address,
-				verifiedAt: Date.now(),
-				updatedAt: Date.now()
+				verifiedAt,
+				updatedAt: verifiedAt
 			});
 		else {
 			const walletId = await ctx.db.insert('personalWallets', {
@@ -117,8 +120,8 @@ export const savePersonalWallet = internalMutation({
 				privyWalletId: args.privyWalletId,
 				address,
 				chainId: 84532,
-				verifiedAt: Date.now(),
-				updatedAt: Date.now()
+				verifiedAt,
+				updatedAt: verifiedAt
 			});
 			wallet = await ctx.db.get(walletId);
 		}
@@ -145,6 +148,14 @@ export const savePersonalWallet = internalMutation({
 				personalWalletId: wallet!._id,
 				updatedAt: Date.now()
 			});
+		await recordDestinationVersion(ctx, {
+			organizationId: args.organizationId,
+			userId: user._id,
+			kind: 'personal',
+			address,
+			personalWalletId: wallet!._id,
+			verifiedAt
+		});
 		return null;
 	}
 });
@@ -196,12 +207,13 @@ export const verifyExternalDestination = mutation({
 				q.eq('organizationId', args.organizationId).eq('userId', user._id)
 			)
 			.unique();
+		const verifiedAt = Date.now();
 		if (profile)
 			await ctx.db.patch(profile._id, {
 				destinationKind: 'external',
 				personalWalletId: undefined,
 				externalAddress: challenge.address,
-				externalVerifiedAt: Date.now(),
+				externalVerifiedAt: verifiedAt,
 				updatedAt: Date.now()
 			});
 		else
@@ -211,9 +223,16 @@ export const verifyExternalDestination = mutation({
 				eligibility: 'active',
 				destinationKind: 'external',
 				externalAddress: challenge.address,
-				externalVerifiedAt: Date.now(),
+				externalVerifiedAt: verifiedAt,
 				updatedAt: Date.now()
 			});
+		await recordDestinationVersion(ctx, {
+			organizationId: args.organizationId,
+			userId: user._id,
+			kind: 'external',
+			address: challenge.address,
+			verifiedAt
+		});
 		await appendAudit(ctx, {
 			organizationId: args.organizationId,
 			actorType: 'user',
@@ -263,4 +282,31 @@ async function sha256(value: string) {
 	return Array.from(new Uint8Array(digest))
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('');
+}
+
+async function recordDestinationVersion(
+	ctx: GenericMutationCtx<DataModel>,
+	input: {
+		organizationId: Id<'organizations'>;
+		userId: Id<'users'>;
+		kind: 'personal' | 'external';
+		address: string;
+		personalWalletId?: Id<'personalWallets'>;
+		verifiedAt: number;
+	}
+) {
+	const versions = await ctx.db
+		.query('payoutDestinationVersions')
+		.withIndex('by_org_user', (q) =>
+			q.eq('organizationId', input.organizationId).eq('userId', input.userId)
+		)
+		.take(100);
+	for (const version of versions)
+		if (version.status === 'active') await ctx.db.patch(version._id, { status: 'superseded' });
+	await ctx.db.insert('payoutDestinationVersions', {
+		...input,
+		version: Math.max(0, ...versions.map((version) => version.version)) + 1,
+		status: 'active',
+		createdAt: Date.now()
+	});
 }

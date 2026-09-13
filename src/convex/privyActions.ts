@@ -4,6 +4,7 @@ import { v } from 'convex/values';
 import { internalAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { createPrivyGateway } from './privy/gateway';
+import { compileSweepPolicy } from '../lib/policy';
 
 function providerErrorCode(error: unknown) {
 	if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string')
@@ -102,7 +103,6 @@ export const provisionInvoiceCollection = internalAction({
 		ownerQuorumId: v.string(),
 		ownerPolicyId: v.string(),
 		automationSignerId: v.string(),
-		automationPolicyId: v.string(),
 		servicePrincipalId: v.id('servicePrincipals'),
 		treasuryDestination: v.string(),
 		actorId: v.string()
@@ -112,13 +112,29 @@ export const provisionInvoiceCollection = internalAction({
 		const correlationId = `invoice-wallet:${args.invoiceId}`;
 		try {
 			const gateway = createPrivyGateway();
+			const sweepPolicy = compileSweepPolicy(args.treasuryDestination);
+			const policyProvider = await gateway.createPolicy({
+				...sweepPolicy,
+				owner_id: args.ownerQuorumId,
+				idempotency_key: `${correlationId}:sweep-policy`
+			});
+			const sweepPolicyId = String((policyProvider as { id: unknown }).id);
+			await ctx.runMutation(internal.operationState.savePolicy, {
+				organizationId: args.organizationId,
+				name: sweepPolicy.name,
+				kind: 'sweep',
+				json: sweepPolicy,
+				correlationId: `${correlationId}:sweep-policy`,
+				actorId: args.actorId,
+				provider: policyProvider
+			});
 			const provider = await gateway.provisionTreasury({
 				ownerId: args.ownerQuorumId,
 				name: args.name,
 				ownerPolicyId: args.ownerPolicyId,
 				automationSigner: {
 					signerId: args.automationSignerId,
-					overridePolicyId: args.automationPolicyId
+					overridePolicyId: sweepPolicyId
 				},
 				idempotencyKey: correlationId
 			});
@@ -128,7 +144,7 @@ export const provisionInvoiceCollection = internalAction({
 				ownerQuorumId: args.ownerQuorumId,
 				ownerPolicyId: args.ownerPolicyId,
 				automationSignerId: args.automationSignerId,
-				automationPolicyId: args.automationPolicyId,
+				automationPolicyId: sweepPolicyId,
 				purpose: 'collection',
 				invoiceId: args.invoiceId,
 				correlationId,
@@ -264,7 +280,8 @@ export const executePayment = internalAction({
 					walletId: bundle.wallet.privyWalletId,
 					asset: operation.asset!,
 					amount: operation.amount!,
-					destination: operation.destination!
+					destination: operation.destination!,
+					idempotencyKey: operation.correlationId
 				});
 				await ctx.runMutation(internal.operationState.saveIntent, {
 					operationId: args.operationId,
