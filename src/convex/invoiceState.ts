@@ -8,6 +8,7 @@ export const attachCollectionWallet = internalMutation({
 		invoiceId: v.id('invoices'),
 		walletId: v.id('wallets'),
 		servicePrincipalId: v.id('servicePrincipals'),
+		asset: v.union(v.literal('ETH'), v.literal('USDC')),
 		treasuryDestination: v.string()
 	},
 	returns: v.null(),
@@ -27,7 +28,7 @@ export const attachCollectionWallet = internalMutation({
 			sourceKey: `invoice:${invoice._id}:issued`,
 			sourceType: 'invoice',
 			amount: invoice.amount,
-			asset: 'USDC',
+			asset: invoice.asset,
 			postingDate: Date.now(),
 			description: `Invoice ${invoice.invoiceNumber} issued`
 		});
@@ -44,8 +45,8 @@ export const attachCollectionWallet = internalMutation({
 				servicePrincipalId: args.servicePrincipalId,
 				sourceWalletId: args.walletId,
 				destination: args.treasuryDestination,
-				asset: 'USDC',
-				policySummary: 'Base Sepolia USDC to the configured treasury destination only',
+				asset: args.asset,
+				policySummary: `Base Sepolia ${args.asset} to the configured treasury destination only`,
 				createdBy: invoice.createdBy
 			});
 		await appendAudit(ctx, {

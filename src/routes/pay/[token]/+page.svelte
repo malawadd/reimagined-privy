@@ -6,7 +6,7 @@
 	import { api } from '../../../convex/_generated/api';
 	import { hashCapabilityToken } from '$lib/capability-token';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
-	import { decimalToUnits, unitsToDecimal } from '$lib/domain';
+	import { assetDecimals, decimalToUnits, unitsToDecimal } from '$lib/domain';
 
 	let tokenHash = $state('');
 	let linkError = $state(false);
@@ -29,9 +29,13 @@
 		setTimeout(() => (copied = false), 1800);
 	}
 
-	function lineTotal(quantity: string, unitAmount: string) {
+	function lineTotal(quantity: string, unitAmount: string, asset: 'ETH' | 'USDC') {
 		try {
-			return unitsToDecimal((BigInt(quantity) * decimalToUnits(unitAmount, 6)).toString(), 6);
+			const decimals = assetDecimals(asset);
+			return unitsToDecimal(
+				(BigInt(quantity) * decimalToUnits(unitAmount, decimals)).toString(),
+				decimals
+			);
 		} catch {
 			return '0';
 		}
@@ -90,13 +94,18 @@
 				</header>
 				{#each invoice.data.lineItems as item}<div>
 						<strong>{item.description}</strong><span>{item.quantity}</span><span
-							>{item.unitAmount} USDC</span
-						><span>{lineTotal(item.quantity, item.unitAmount)} USDC</span>
+							>{item.unitAmount} {invoice.data.asset}</span
+						><span
+							>{lineTotal(item.quantity, item.unitAmount, invoice.data.asset)}
+							{invoice.data.asset}</span
+						>
 					</div>{/each}
 			</div>
 			<div class="amount-summary">
-				<div><span>Received</span><strong>{invoice.data.paidAmount} USDC</strong></div>
-				<div><span>Total due</span><strong>{invoice.data.amount} USDC</strong></div>
+				<div>
+					<span>Received</span><strong>{invoice.data.paidAmount} {invoice.data.asset}</strong>
+				</div>
+				<div><span>Total due</span><strong>{invoice.data.amount} {invoice.data.asset}</strong></div>
 			</div>
 			{#if invoice.data.status === 'paid'}
 				<div class="paid-state">
@@ -115,17 +124,17 @@
 				<div class="payment-box">
 					<div class="asset-mark"><WalletCards size={23} /></div>
 					<div>
-						<span>SEND ON BASE SEPOLIA</span><strong>{invoice.data.amount} USDC</strong><small
-							>to this invoice-specific collection address</small
-						>
+						<span>SEND ON BASE SEPOLIA</span><strong
+							>{invoice.data.amount} {invoice.data.asset}</strong
+						><small>to this invoice-specific collection address</small>
 					</div>
 					<button onclick={copyAddress}
 						>{#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
 						{copied ? 'Copied' : 'Copy address'}</button
 					><code>{invoice.data.collectionAddress}</code>
 					<p>
-						Only send Base Sepolia USDC. Funds sent on another network or using another asset may
-						not be recoverable.
+						Only send Base Sepolia {invoice.data.asset}. Funds sent on another network or using
+						another asset may not be recoverable.
 					</p>
 				</div>
 			{:else}<div class="closed-state">

@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { internal } from './_generated/api';
 import { assertOrgScoped, requireMembership } from './lib/authz';
-import { decimalToUnits, normalizeDecimal, unitsToDecimal } from '../lib/domain';
+import { assetDecimals, decimalToUnits, normalizeDecimal, unitsToDecimal } from '../lib/domain';
 import { generateCapabilityToken, hashCapabilityToken } from '../lib/capability-token';
 import { appendAudit } from './lib/audit';
 import { prepareSourceJournalReversal } from './lib/accounting';
@@ -28,7 +28,7 @@ const invoiceValidator = v.object({
 	invoiceNumber: v.string(),
 	customerName: v.string(),
 	customerEmail: v.optional(v.string()),
-	asset: v.literal('USDC'),
+	asset: v.union(v.literal('ETH'), v.literal('USDC')),
 	amount: v.string(),
 	paidAmount: v.string(),
 	dueAt: v.number(),
@@ -67,12 +67,116 @@ export const list = query({
 	}
 });
 
+export const readiness = query({
+	args: { organizationId: v.id('organizations') },
+	returns: v.object({
+		ready: v.boolean(),
+		quorumReady: v.boolean(),
+		ownerPolicyReady: v.boolean(),
+		automationSignerReady: v.boolean(),
+		message: v.string()
+	}),
+	handler: async (ctx, args) => {
+		await requireMembership(ctx, args.organizationId, 'invoice:manage');
+		const [quorum, policies, principals] = await Promise.all([
+			ctx.db
+				.query('reviewerQuorums')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.unique(),
+			ctx.db
+				.query('policies')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100),
+			ctx.db
+				.query('servicePrincipals')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100)
+		]);
+		const quorumReady = Boolean(quorum);
+		const ownerPolicyReady = policies.some(
+			(policy) => policy.kind === 'owner' && policy.status === 'active'
+		);
+		const automationSignerReady = principals.some((principal) => principal.status === 'active');
+		const ready = quorumReady && ownerPolicyReady && automationSignerReady;
+		return {
+			ready,
+			quorumReady,
+			ownerPolicyReady,
+			automationSignerReady,
+			message: ready
+				? 'Invoice collection infrastructure is ready.'
+				: 'Prepare the missing quorum, owner policy, or Ratib automation signer before issuing.'
+		};
+	}
+});
+
+export const prepareInfrastructure = mutation({
+	args: { organizationId: v.id('organizations') },
+	returns: v.object({ ready: v.boolean(), createdSignerMirror: v.boolean() }),
+	handler: async (ctx, args) => {
+		const { user } = await requireMembership(ctx, args.organizationId, 'org:manage');
+		const [quorum, policies, principals] = await Promise.all([
+			ctx.db
+				.query('reviewerQuorums')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.unique(),
+			ctx.db
+				.query('policies')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100),
+			ctx.db
+				.query('servicePrincipals')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100)
+		]);
+		if (!quorum)
+			throw new Error(
+				'No synchronized owner quorum is available. Reconcile treasury provisioning first.'
+			);
+		if (!policies.some((policy) => policy.kind === 'owner' && policy.status === 'active'))
+			throw new Error(
+				'No active Privy owner policy is available. Reconcile treasury provisioning first.'
+			);
+		const authorizationKeyId = process.env.PRIVY_AUTHORIZATION_KEY_ID?.trim();
+		if (!authorizationKeyId)
+			throw new Error('Ratib automation signing is not configured for this deployment.');
+		let createdSignerMirror = false;
+		const matching = principals.find(
+			(principal) => principal.privyAuthorizationKeyId === authorizationKeyId
+		);
+		if (matching) {
+			if (matching.status !== 'active') await ctx.db.patch(matching._id, { status: 'active' });
+		} else {
+			await ctx.db.insert('servicePrincipals', {
+				organizationId: args.organizationId,
+				name: 'Ratib controlled automation',
+				purpose: 'Policy-bounded Base Sepolia execution',
+				privyAuthorizationKeyId: authorizationKeyId,
+				status: 'active'
+			});
+			createdSignerMirror = true;
+		}
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: 'invoice.infrastructure_prepared',
+			resourceType: 'organization',
+			resourceId: args.organizationId,
+			correlationId: `invoice-readiness:${args.organizationId}`,
+			metadata: { createdSignerMirror }
+		});
+		return { ready: true, createdSignerMirror };
+	}
+});
+
 export const createAndIssue = mutation({
 	args: {
 		organizationId: v.id('organizations'),
 		invoiceNumber: v.string(),
 		customerName: v.string(),
 		customerEmail: v.optional(v.string()),
+		asset: v.optional(v.union(v.literal('ETH'), v.literal('USDC'))),
 		dueAt: v.number(),
 		lineItems: v.array(lineItemValidator),
 		notes: v.optional(v.string()),
@@ -124,6 +228,8 @@ export const createAndIssue = mutation({
 			throw new Error(
 				'Invoice collection requires a verified quorum, owner policy, and configured Ratib automation signer.'
 			);
+		const asset = args.asset ?? 'USDC';
+		const decimals = assetDecimals(asset);
 		let totalUnits = 0n;
 		const lineItems = args.lineItems.map((item) => {
 			const description = item.description.trim();
@@ -132,8 +238,8 @@ export const createAndIssue = mutation({
 			const quantity = normalizeDecimal(item.quantity, 0);
 			if (BigInt(quantity) < 1n)
 				throw new Error('Line item quantity must be a positive whole number.');
-			const unitAmount = normalizeDecimal(item.unitAmount, 6);
-			const unitAmountUnits = decimalToUnits(unitAmount, 6);
+			const unitAmount = normalizeDecimal(item.unitAmount, decimals);
+			const unitAmountUnits = decimalToUnits(unitAmount, decimals);
 			if (unitAmountUnits < 1n) throw new Error('Line item amount must be greater than zero.');
 			totalUnits += BigInt(quantity) * unitAmountUnits;
 			return { description, quantity, unitAmount };
@@ -146,8 +252,8 @@ export const createAndIssue = mutation({
 			invoiceNumber,
 			customerName,
 			customerEmail: args.customerEmail?.trim().toLowerCase() || undefined,
-			asset: 'USDC',
-			amount: unitsToDecimal(totalUnits.toString(), 6),
+			asset,
+			amount: unitsToDecimal(totalUnits.toString(), decimals),
 			paidAmount: '0',
 			dueAt: args.dueAt,
 			status: 'provisioning',
@@ -171,8 +277,8 @@ export const createAndIssue = mutation({
 			metadata: {
 				invoiceNumber,
 				customerName,
-				amount: unitsToDecimal(totalUnits.toString(), 6),
-				asset: 'USDC'
+				amount: unitsToDecimal(totalUnits.toString(), decimals),
+				asset
 			}
 		});
 		await ctx.scheduler.runAfter(0, internal.privyActions.provisionInvoiceCollection, {
@@ -183,6 +289,7 @@ export const createAndIssue = mutation({
 			ownerPolicyId: ownerPolicy.privyPolicyId,
 			automationSignerId: principal.privyAuthorizationKeyId,
 			servicePrincipalId: principal._id,
+			asset,
 			treasuryDestination: treasuryWallet.address,
 			actorId: user.privyDid
 		});
@@ -246,7 +353,7 @@ export const getPublic = query({
 			organizationName: v.string(),
 			invoiceNumber: v.string(),
 			customerName: v.string(),
-			asset: v.literal('USDC'),
+			asset: v.union(v.literal('ETH'), v.literal('USDC')),
 			amount: v.string(),
 			paidAmount: v.string(),
 			dueAt: v.number(),

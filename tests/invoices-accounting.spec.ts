@@ -6,6 +6,67 @@ import { api, internal } from '../src/convex/_generated/api';
 const modules = import.meta.glob('../src/convex/**/*.ts');
 
 describe('invoice accounting lifecycle', () => {
+	it('repairs the prototype signer mirror only after quorum and owner policy are present', async () => {
+		const previousKey = process.env.PRIVY_AUTHORIZATION_KEY_ID;
+		process.env.PRIVY_AUTHORIZATION_KEY_ID = 'key_invoice_readiness';
+		try {
+			const t = convexTest(schema, modules);
+			const owner = t.withIdentity({
+				subject: 'did:privy:invoice-readiness-owner',
+				email: 'owner@example.com'
+			});
+			const ownerId = await owner.mutation(api.users.syncCurrent, {});
+			const organizationId = await t.run(async (ctx) => {
+				const organizationId = await ctx.db.insert('organizations', {
+					name: 'Invoice Readiness',
+					slug: `invoice-readiness-${crypto.randomUUID()}`,
+					createdByUserId: ownerId,
+					active: true
+				});
+				await ctx.db.insert('memberships', {
+					organizationId,
+					userId: ownerId,
+					role: 'owner',
+					status: 'active'
+				});
+				await ctx.db.insert('reviewerQuorums', {
+					organizationId,
+					privyOwnerId: 'quorum_invoice_readiness',
+					threshold: 1,
+					reviewerCount: 1,
+					mfaRequired: true,
+					syncedAt: Date.now()
+				});
+				await ctx.db.insert('policies', {
+					organizationId,
+					privyPolicyId: 'policy_invoice_readiness',
+					name: 'Owner policy',
+					version: 1,
+					kind: 'owner',
+					json: {},
+					status: 'active',
+					createdAt: Date.now()
+				});
+				return organizationId;
+			});
+			expect(await owner.query(api.invoices.readiness, { organizationId })).toMatchObject({
+				ready: false,
+				automationSignerReady: false
+			});
+			expect(await owner.mutation(api.invoices.prepareInfrastructure, { organizationId })).toEqual({
+				ready: true,
+				createdSignerMirror: true
+			});
+			expect(await owner.query(api.invoices.readiness, { organizationId })).toMatchObject({
+				ready: true,
+				automationSignerReady: true
+			});
+		} finally {
+			if (previousKey === undefined) delete process.env.PRIVY_AUTHORIZATION_KEY_ID;
+			else process.env.PRIVY_AUTHORIZATION_KEY_ID = previousKey;
+		}
+	});
+
 	it('posts issuance only after provisioning and prepares a reviewed void reversal', async () => {
 		const t = convexTest(schema, modules);
 		const owner = t.withIdentity({
@@ -98,6 +159,7 @@ describe('invoice accounting lifecycle', () => {
 			invoiceId: seeded.invoiceId,
 			walletId: seeded.collectionWalletId,
 			servicePrincipalId: seeded.servicePrincipalId,
+			asset: 'USDC',
 			treasuryDestination: '0x0000000000000000000000000000000000000001'
 		});
 		const issued = await t.run((ctx) => ctx.db.query('journals').unique());

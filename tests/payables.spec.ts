@@ -63,7 +63,7 @@ describe('payable approval and execution', () => {
 				organizationId,
 				label: 'Approved vendor',
 				address: '0x0000000000000000000000000000000000000002',
-				assets: ['USDC'],
+				assets: ['USDC', 'ETH'],
 				status: 'approved',
 				createdBy: reviewerId,
 				approvedBy: ownerId,
@@ -107,6 +107,43 @@ describe('payable approval and execution', () => {
 		expect(stored.attempt?.status).toBe('pending');
 		expect(stored.journals.some((journal) => journal.sourceKey.includes(String(payableId)))).toBe(
 			true
+		);
+
+		const ethPayableId = await owner.mutation(api.payables.create, {
+			organizationId,
+			type: 'bill',
+			reference: 'BILL-ETH-1002',
+			payeeName: 'Approved vendor',
+			recipientId,
+			destination: '0x0000000000000000000000000000000000000002',
+			asset: 'ETH',
+			amount: '0.0004',
+			dueAt: Date.now() + 86_400_000
+		});
+		await owner.mutation(api.payables.submitForApproval, {
+			organizationId,
+			payableId: ethPayableId,
+			walletId
+		});
+		await reviewer.mutation(api.payables.approve, { organizationId, payableId: ethPayableId });
+		const ethQueued = await owner.mutation(api.payables.queuePayment, {
+			organizationId,
+			payableId: ethPayableId,
+			walletId
+		});
+		const ethStored = await t.run(async (ctx) => ({
+			payable: await ctx.db.get(ethPayableId),
+			operation: await ctx.db.get(ethQueued.operationId),
+			cases: await ctx.db.query('reconciliationCases').collect()
+		}));
+		expect(ethStored.payable).toMatchObject({ asset: 'ETH', amount: '0.0004' });
+		expect(ethStored.operation).toMatchObject({
+			asset: 'ETH',
+			amount: '0.0004',
+			approvalPath: 'privyIntent'
+		});
+		expect(ethStored.cases).toContainEqual(
+			expect.objectContaining({ kind: 'missingValuation', sourceType: 'payable' })
 		);
 	});
 });

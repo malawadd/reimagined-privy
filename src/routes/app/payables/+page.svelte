@@ -22,6 +22,7 @@
 	const queuePayment = useMutation(api.payables.queuePayment);
 	const generateUploadUrl = useMutation(api.payables.generateReceiptUploadUrl);
 	let tab = $state<'bill' | 'expense'>('bill');
+	let asset = $state<'ETH' | 'USDC'>('ETH');
 	let creating = $state(false);
 	let sourceWalletId = $state('');
 	let reference = $state('');
@@ -35,6 +36,7 @@
 	let receiptFile = $state<File | null>(null);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
+	let selectedPayable = $state<NonNullable<typeof payables.data>[number] | null>(null);
 	let filtered = $derived((payables.data ?? []).filter((row) => row.payable.type === tab));
 
 	$effect(() => {
@@ -72,6 +74,7 @@
 			await createPayable({
 				organizationId: workspace.activeOrganizationId,
 				type: tab,
+				asset,
 				reference,
 				payeeName,
 				recipientId: recipientId ? (recipientId as Id<'recipients'>) : undefined,
@@ -102,7 +105,7 @@
 		if (!workspace.activeOrganizationId || !sourceWalletId) return;
 		if (
 			!confirm(
-				`Queue ${row.payable.amount} USDC to ${row.payable.payeeName} at ${row.payable.destination}? Privy will enforce the final signing route.`
+				`Queue ${row.payable.amount} ${row.payable.asset} to ${row.payable.payeeName} at ${row.payable.destination}? Privy will enforce the final signing route.`
 			)
 		)
 			return;
@@ -148,7 +151,7 @@
 <PageHeader
 	eyebrow="ACCOUNTS PAYABLE"
 	title="Bills & expenses"
-	description="Capture obligations and receipts, then route exact USDC payments through the shared Privy operation engine."
+	description="Capture obligations and receipts, then route exact ETH or USDC payments through the shared Privy operation engine."
 >
 	{#snippet action()}<button class="button primary" onclick={() => (creating = true)}
 			><Plus size={15} /> New {tab}</button
@@ -206,14 +209,20 @@
 								>{row.payable.payeeName}<small class="mono"
 									>{row.payable.destination.slice(0, 9)}…{row.payable.destination.slice(-6)}</small
 								></td
-							><td><strong>{row.payable.amount} USDC</strong></td><td
+							><td><strong>{row.payable.amount} {row.payable.asset}</strong></td><td
 								>{new Date(row.payable.dueAt).toLocaleDateString()}</td
 							><td
 								>{#if row.receiptUrl}<a href={row.receiptUrl} target="_blank" rel="noreferrer"
 										>Open <ExternalLink size={12} /></a
 									>{:else}None{/if}</td
 							><td><StatusBadge status={row.payable.status} /></td><td
-								>{#if row.payable.status === 'draft'}<button
+								><div class="row-actions">
+									<button
+										class="icon-button"
+										title={`Open ${row.payable.type}`}
+										aria-label={`Open payable ${row.payable.reference}`}
+										onclick={() => (selectedPayable = row)}><ReceiptText size={14} /></button
+									>{#if row.payable.status === 'draft'}<button
 										class="button secondary compact-button"
 										disabled={!sourceWalletId}
 										onclick={() => submitForApproval(row)}>Submit <Send size={13} /></button
@@ -227,13 +236,39 @@
 										>{row.payable.status === 'failed' ? 'Retry' : 'Pay'} <Send size={13} /></button
 									>{:else if row.payable.operationId}<a class="text-link" href="/app/approvals"
 										>Track</a
-									>{/if}</td
+									>{/if}
+								</div></td
 							></tr
 						>{/each}</tbody
 				>
 			</table>
 		</div>{/if}
 </section>
+
+{#if selectedPayable}<div class="modal-backdrop" role="presentation">
+		<div class="payable-dialog detail-dialog" role="dialog" aria-modal="true" aria-labelledby="payable-detail-title">
+			<button class="dialog-close" aria-label="Close payable" onclick={() => (selectedPayable = null)}><X size={17} /></button>
+			<p class="eyebrow">{selectedPayable.payable.type.toUpperCase()} DETAILS</p>
+			<h2 id="payable-detail-title">{selectedPayable.payable.reference}</h2>
+			<div class="detail-summary">
+				<div><span>Payee</span><strong>{selectedPayable.payable.payeeName}</strong></div>
+				<div><span>Amount</span><strong>{selectedPayable.payable.amount} {selectedPayable.payable.asset}</strong></div>
+				<div><span>Due date</span><strong>{new Date(selectedPayable.payable.dueAt).toLocaleDateString()}</strong></div>
+				<div><span>Status</span><StatusBadge status={selectedPayable.payable.status} /></div>
+				<div><span>Category</span><strong>{selectedPayable.payable.category ?? 'Uncategorized'}</strong></div>
+				<div><span>Source treasury</span><strong>{wallets.data?.find((wallet) => wallet._id === selectedPayable?.payable.sourceWalletId)?.name ?? 'Chosen when submitted'}</strong></div>
+			</div>
+			<div class="detail-section">
+				<span>Destination</span><code>{selectedPayable.payable.destination}</code>
+			</div>
+			{#if selectedPayable.payable.memo}<div class="detail-section"><span>Memo</span><p>{selectedPayable.payable.memo}</p></div>{/if}
+			<div class="detail-section">
+				<span>Evidence</span>
+				{#if selectedPayable.receiptUrl}<a class="button secondary evidence-link" href={selectedPayable.receiptUrl} target="_blank" rel="noreferrer">Open receipt <ExternalLink size={13} /></a>{:else}<p>No receipt attached.</p>{/if}
+			</div>
+			<div class="dialog-actions"><button class="button secondary" onclick={() => (selectedPayable = null)}>Close</button></div>
+		</div>
+	</div>{/if}
 
 {#if creating}<div class="modal-backdrop" role="presentation">
 		<div class="payable-dialog" role="dialog" aria-modal="true" aria-labelledby="payable-title">
@@ -248,6 +283,9 @@
 					void save();
 				}}
 			>
+				<label for="payable-asset">Asset</label><select id="payable-asset" bind:value={asset}
+					><option value="ETH">ETH</option><option value="USDC">USDC</option></select
+				>
 				<div class="field-pair">
 					<div>
 						<label for="payable-reference">Reference</label><input
@@ -271,8 +309,11 @@
 					value={recipientId}
 					onchange={(event) => selectRecipient(event.currentTarget.value)}
 					><option value="">Enter address manually</option
-					>{#each (recipients.data ?? []).filter((item) => item.status === 'approved' && item.assets.includes('USDC')) as recipient}<option
-							value={recipient._id}>{recipient.label}</option
+					>{#each (recipients.data ?? []).filter((item) => item.status !== 'revoked' && item.assets.includes(asset)) as recipient}<option
+							value={recipient._id}
+							>{recipient.label} · {recipient.status === 'approved'
+								? 'approved'
+								: 'pending approval'}</option
 						>{/each}</select
 				>
 				<div class="field-pair">
@@ -288,7 +329,7 @@
 						<label for="payable-amount">Amount</label>
 						<div class="amount-input">
 							<input id="payable-amount" bind:value={amount} inputmode="decimal" required /><span
-								>USDC</span
+								>{asset}</span
 							>
 						</div>
 					</div>
@@ -401,6 +442,11 @@
 		padding: 0 10px;
 		font-size: 0.64rem;
 	}
+	.row-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
 	.payable-empty {
 		display: grid;
 		min-height: 260px;
@@ -457,6 +503,52 @@
 		font-family: Georgia, serif;
 		font-size: 1.6rem;
 		font-weight: 500;
+	}
+	.detail-dialog {
+		width: min(650px, 100%);
+	}
+	.detail-summary {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		margin-top: 18px;
+		border: 1px solid #dce4e6;
+		background: #dce4e6;
+	}
+	.detail-summary > div {
+		display: grid;
+		gap: 5px;
+		padding: 13px;
+		background: white;
+	}
+	.detail-summary span,
+	.detail-section > span {
+		color: #75838a;
+		font-size: 0.6rem;
+		font-weight: 750;
+		text-transform: uppercase;
+	}
+	.detail-summary strong {
+		font-size: 0.74rem;
+	}
+	.detail-section {
+		display: grid;
+		gap: 7px;
+		margin-top: 17px;
+	}
+	.detail-section code {
+		border: 1px solid #dce4e6;
+		padding: 11px;
+		overflow-wrap: anywhere;
+		font-size: 0.68rem;
+	}
+	.detail-section p {
+		margin: 0;
+		color: #6e7c83;
+		font-size: 0.7rem;
+	}
+	.evidence-link {
+		width: fit-content;
 	}
 	.payable-dialog form {
 		display: grid;
@@ -540,6 +632,9 @@
 		}
 		.dialog-actions .button {
 			width: 100%;
+		}
+		.detail-summary {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

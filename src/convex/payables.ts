@@ -2,7 +2,12 @@ import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { internal } from './_generated/api';
 import { assertOrgScoped, requireMembership, requireWalletPermission } from './lib/authz';
-import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../lib/domain';
+import {
+	assetDecimals,
+	normalizeDecimal,
+	normalizeEvmAddress,
+	selectPaymentRoute
+} from '../lib/domain';
 import { appendAudit } from './lib/audit';
 import { activeAutomationPolicyAllows, payoutAttemptKey } from '../lib/payout-domain';
 import { postSourceJournal } from './lib/accounting';
@@ -16,7 +21,7 @@ const payableValidator = v.object({
 	payeeName: v.string(),
 	recipientId: v.optional(v.id('recipients')),
 	destination: v.string(),
-	asset: v.literal('USDC'),
+	asset: v.union(v.literal('ETH'), v.literal('USDC')),
 	amount: v.string(),
 	dueAt: v.number(),
 	category: v.optional(v.string()),
@@ -65,7 +70,7 @@ export const submitForApproval = mutation({
 			!recipient ||
 			recipient.organizationId !== args.organizationId ||
 			recipient.status !== 'approved' ||
-			!recipient.assets.includes('USDC') ||
+			!recipient.assets.includes(payable.asset) ||
 			recipient.address !== payable.destination
 		)
 			throw new Error('Approve this payable counterparty before submitting it.');
@@ -113,7 +118,7 @@ export const approve = mutation({
 			sourceKey: `payable:${payable._id}:approved`,
 			sourceType: 'payable',
 			amount: payable.amount,
-			asset: 'USDC',
+			asset: payable.asset,
 			postingDate: now,
 			description: `${payable.type === 'bill' ? 'Bill' : 'Expense'} ${payable.reference} approved`
 		});
@@ -176,6 +181,7 @@ export const create = mutation({
 		payeeName: v.string(),
 		recipientId: v.optional(v.id('recipients')),
 		destination: v.string(),
+		asset: v.optional(v.union(v.literal('ETH'), v.literal('USDC'))),
 		amount: v.string(),
 		dueAt: v.number(),
 		category: v.optional(v.string()),
@@ -205,7 +211,8 @@ export const create = mutation({
 			if (recipient.address !== destination)
 				throw new Error('Recipient address does not match the payable destination.');
 		}
-		const amount = normalizeDecimal(args.amount, 6);
+		const asset = args.asset ?? 'USDC';
+		const amount = normalizeDecimal(args.amount, assetDecimals(asset));
 		if (amount === '0') throw new Error('Amount must be greater than zero.');
 		const now = Date.now();
 		const payableId = await ctx.db.insert('payables', {
@@ -215,7 +222,7 @@ export const create = mutation({
 			payeeName,
 			recipientId: args.recipientId,
 			destination,
-			asset: 'USDC',
+			asset,
 			amount,
 			dueAt: args.dueAt,
 			category: args.category?.trim() || undefined,
@@ -234,7 +241,7 @@ export const create = mutation({
 			resourceType: 'payable',
 			resourceId: payableId,
 			correlationId: `payable:${payableId}`,
-			metadata: { reference, amount, destination }
+			metadata: { reference, amount, destination, asset }
 		});
 		return payableId;
 	}
@@ -289,15 +296,16 @@ export const queuePayment = mutation({
 		]);
 		const policyAllowsAutomation =
 			recipient?.status === 'approved' &&
-			recipient.assets.includes('USDC') &&
+			recipient.assets.includes(payable.asset) &&
 			activeAutomationPolicyAllows({
 				policies,
 				walletPolicyIds: wallet.policyIds,
 				amount: payable.amount,
-				destination: payable.destination
+				destination: payable.destination,
+				asset: payable.asset
 			});
 		const decision = selectPaymentRoute({
-			asset: 'USDC',
+			asset: payable.asset,
 			amount: payable.amount,
 			destination: payable.destination,
 			recipientApproved: policyAllowsAutomation
@@ -314,7 +322,7 @@ export const queuePayment = mutation({
 			kind: 'payment',
 			status: 'queued',
 			approvalPath: path,
-			asset: 'USDC',
+			asset: payable.asset,
 			amount: payable.amount,
 			destination: payable.destination,
 			memo: payable.memo,

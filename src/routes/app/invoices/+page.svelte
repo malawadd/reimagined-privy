@@ -4,7 +4,7 @@
 	import { api } from '../../../convex/_generated/api';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
-	import { decimalToUnits, unitsToDecimal } from '$lib/domain';
+	import { assetDecimals, decimalToUnits, unitsToDecimal } from '$lib/domain';
 	import { workspace } from '$lib/workspace.svelte';
 
 	const invoices = useQuery(api.invoices.list, () =>
@@ -13,10 +13,15 @@
 	const wallets = useQuery(api.wallets.list, () =>
 		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
 	);
+	const readiness = useQuery(api.invoices.readiness, () =>
+		workspace.activeOrganizationId ? { organizationId: workspace.activeOrganizationId } : 'skip'
+	);
 	const createInvoice = useMutation(api.invoices.createAndIssue);
+	const prepareInfrastructure = useMutation(api.invoices.prepareInfrastructure);
 	const rotateLink = useMutation(api.invoices.rotatePublicLink);
 	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	let creating = $state(false);
+	let asset = $state<'ETH' | 'USDC'>('ETH');
 	let invoiceNumber = $state('');
 	let customerName = $state('');
 	let customerEmail = $state('');
@@ -27,6 +32,9 @@
 	let working = $state(false);
 	let error = $state<string | null>(null);
 	let issuedLink = $state<string | null>(null);
+	let issuedLinkInvoiceId = $state<string | null>(null);
+	let preparing = $state(false);
+	let selectedInvoice = $state<NonNullable<typeof invoices.data>[number] | null>(null);
 
 	$effect(() => {
 		if (!treasuryWalletId)
@@ -37,10 +45,12 @@
 		try {
 			const units = lineItems.reduce(
 				(sum, item) =>
-					sum + BigInt(item.quantity || '0') * decimalToUnits(item.unitAmount || '0', 6),
+					sum +
+					BigInt(item.quantity || '0') *
+						decimalToUnits(item.unitAmount || '0', assetDecimals(asset)),
 				0n
 			);
-			return unitsToDecimal(units.toString(), 6);
+			return unitsToDecimal(units.toString(), assetDecimals(asset));
 		} catch {
 			return '0';
 		}
@@ -60,7 +70,7 @@
 		if (!workspace.activeOrganizationId || !treasuryWalletId) return;
 		if (
 			!confirm(
-				`Issue invoice ${invoiceNumber} for ${total} USDC? Ratib will provision a dedicated live Privy collection wallet and a policy-bound sweep.`
+				`Issue invoice ${invoiceNumber} for ${total} ${asset}? Ratib will provision a dedicated live Privy collection wallet and a policy-bound sweep.`
 			)
 		)
 			return;
@@ -69,6 +79,7 @@
 		try {
 			const result = await createInvoice({
 				organizationId: workspace.activeOrganizationId,
+				asset,
 				invoiceNumber,
 				customerName,
 				customerEmail: customerEmail || undefined,
@@ -78,11 +89,26 @@
 				treasuryWalletId: treasuryWalletId as NonNullable<typeof wallets.data>[number]['_id']
 			});
 			issuedLink = `${location.origin}/pay/${result.publicToken}`;
+			issuedLinkInvoiceId = result.invoiceId;
 			creating = false;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Unable to issue invoice.';
 		} finally {
 			working = false;
+		}
+	}
+
+	async function prepare() {
+		if (!workspace.activeOrganizationId) return;
+		preparing = true;
+		error = null;
+		try {
+			await prepareInfrastructure({ organizationId: workspace.activeOrganizationId });
+		} catch (caught) {
+			error =
+				caught instanceof Error ? caught.message : 'Unable to prepare invoice infrastructure.';
+		} finally {
+			preparing = false;
 		}
 	}
 
@@ -94,6 +120,7 @@
 			return;
 		const result = await rotateLink({ organizationId: workspace.activeOrganizationId, invoiceId });
 		issuedLink = `${location.origin}/pay/${result.publicToken}`;
+		issuedLinkInvoiceId = invoiceId;
 	}
 
 	async function voidRecord(
@@ -119,7 +146,7 @@
 <PageHeader
 	eyebrow="ACCOUNTS RECEIVABLE"
 	title="Invoices"
-	description="Issue USDC payment requests with one policy-bound Privy collection wallet per invoice."
+	description="Issue ETH or USDC payment requests with one policy-bound Privy collection wallet per invoice."
 >
 	{#snippet action()}<button
 			class="button primary"
@@ -129,6 +156,17 @@
 			}}><Plus size={15} /> New invoice</button
 		>{/snippet}
 </PageHeader>
+
+{#if readiness.data && !readiness.data.ready}
+	<div class="link-banner" role="status">
+		<div>
+			<strong>Invoice infrastructure needs preparation</strong><span>{readiness.data.message}</span>
+		</div>
+		<button class="button secondary" disabled={preparing} onclick={prepare}
+			>{preparing ? 'Preparing…' : 'Prepare in Ratib'}</button
+		>
+	</div>
+{/if}
 
 {#if issuedLink}<div class="link-banner" role="status">
 		<div><strong>Secure payment link ready</strong><span>{issuedLink}</span></div>
@@ -171,11 +209,13 @@
 				><tbody
 					>{#each invoices.data ?? [] as row}<tr
 							><td
-								><strong>{row.invoice.invoiceNumber}</strong><small>{row.invoice.amount} USDC</small
+								><strong>{row.invoice.invoiceNumber}</strong><small
+									>{row.invoice.amount} {row.invoice.asset}</small
 								></td
 							><td>{row.invoice.customerName}</td><td
 								>{new Date(row.invoice.dueAt).toLocaleDateString()}</td
-							><td><strong>{row.invoice.paidAmount} USDC</strong></td><td class="mono small"
+							><td><strong>{row.invoice.paidAmount} {row.invoice.asset}</strong></td><td
+								class="mono small"
 								>{row.collectionAddress
 									? `${row.collectionAddress.slice(0, 9)}…${row.collectionAddress.slice(-6)}`
 									: row.invoice.status === 'failed'
@@ -183,6 +223,12 @@
 										: 'Provisioning…'}</td
 							><td><StatusBadge status={row.invoice.status} /></td><td
 								><div class="row-actions">
+									<button
+										class="icon-button"
+										title="Open invoice"
+										aria-label={`Open invoice ${row.invoice.invoiceNumber}`}
+										onclick={() => (selectedInvoice = row)}><FileText size={14} /></button
+									>
 									<button
 										class="icon-button"
 										title="Rotate public link"
@@ -204,6 +250,96 @@
 		</div>{/if}
 </section>
 
+{#if selectedInvoice}
+	<div class="modal-backdrop" role="presentation">
+		<div
+			class="invoice-dialog detail-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="invoice-detail-title"
+		>
+			<button
+				class="dialog-close"
+				aria-label="Close invoice"
+				onclick={() => (selectedInvoice = null)}><X size={17} /></button
+			>
+			<p class="eyebrow">INVOICE DETAILS</p>
+			<h2 id="invoice-detail-title">{selectedInvoice.invoice.invoiceNumber}</h2>
+			<div class="detail-summary">
+				<div><span>Customer</span><strong>{selectedInvoice.invoice.customerName}</strong></div>
+				<div
+					><span>Amount due</span><strong
+						>{selectedInvoice.invoice.amount} {selectedInvoice.invoice.asset}</strong
+					></div
+				>
+				<div
+					><span>Collected</span><strong
+						>{selectedInvoice.invoice.paidAmount} {selectedInvoice.invoice.asset}</strong
+					></div
+				>
+				<div
+					><span>Due date</span><strong
+						>{new Date(selectedInvoice.invoice.dueAt).toLocaleDateString()}</strong
+					></div
+				>
+			</div>
+			<div class="detail-section">
+				<div class="detail-heading">
+					<span>Line items</span><StatusBadge status={selectedInvoice.invoice.status} />
+				</div>
+				{#each selectedInvoice.invoice.lineItems as item}
+					<div class="detail-line">
+						<div
+							><strong>{item.description}</strong><span
+								>{item.quantity} × {item.unitAmount} {selectedInvoice.invoice.asset}</span
+							></div
+						>
+						<strong
+							>{unitsToDecimal(
+								(
+									BigInt(item.quantity) *
+									decimalToUnits(item.unitAmount, assetDecimals(selectedInvoice.invoice.asset))
+								).toString(),
+								assetDecimals(selectedInvoice.invoice.asset)
+							)} {selectedInvoice.invoice.asset}</strong
+						>
+					</div>
+				{/each}
+			</div>
+			<div class="detail-section">
+				<span>Collection wallet</span>
+				<div class="wallet-address">
+					<code>{selectedInvoice.collectionAddress ?? 'Provisioning…'}</code>
+					{#if selectedInvoice.collectionAddress}<button
+							class="icon-button"
+							title="Copy collection address"
+							aria-label="Copy collection address"
+							onclick={() => copy(selectedInvoice!.collectionAddress!)}><Copy size={14} /></button
+						>{/if}
+				</div>
+			</div>
+			<div class="detail-section">
+				<span>Payment URL</span>
+				{#if issuedLink && issuedLinkInvoiceId === selectedInvoice.invoice._id}
+					<div class="payment-url">
+						<code>{issuedLink}</code>
+						<button class="icon-button" title="Copy payment URL" aria-label="Copy payment URL" onclick={() => copy(issuedLink!)}><Copy size={14} /></button>
+						<a class="icon-button" href={issuedLink} target="_blank" rel="noreferrer" title="Open payment URL" aria-label="Open payment URL"><ExternalLink size={14} /></a>
+					</div>
+				{:else}
+					<button class="button secondary fresh-link" onclick={() => rotate(selectedInvoice!.invoice._id)}><ExternalLink size={14} /> Generate payment URL</button>
+				{/if}
+			</div>
+			{#if selectedInvoice.invoice.notes}<div class="detail-section">
+					<span>Notes</span><p>{selectedInvoice.invoice.notes}</p>
+				</div>{/if}
+			<div class="dialog-actions">
+				<button class="button secondary" onclick={() => (selectedInvoice = null)}>Close</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 {#if creating}
 	<div class="modal-backdrop" role="presentation">
 		<div class="invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="new-invoice-title">
@@ -211,7 +347,7 @@
 				><X size={17} /></button
 			>
 			<p class="eyebrow">NEW RECEIVABLE</p>
-			<h2 id="new-invoice-title">Issue USDC invoice</h2>
+			<h2 id="new-invoice-title">Issue {asset} invoice</h2>
 			<p>A dedicated Base Sepolia wallet is created only after final confirmation.</p>
 			<form
 				onsubmit={(event) => {
@@ -219,6 +355,9 @@
 					void issue();
 				}}
 			>
+				<label for="invoice-asset">Asset</label><select id="invoice-asset" bind:value={asset}
+					><option value="ETH">ETH</option><option value="USDC">USDC</option></select
+				>
 				<div class="field-pair">
 					<div>
 						<label for="invoice-number">Invoice number</label><input
@@ -296,7 +435,7 @@
 									inputmode="decimal"
 									placeholder="0.00"
 									required
-								/><span>USDC</span>
+								/><span>{asset}</span>
 							</div>
 							{#if lineItems.length > 1}<button
 									type="button"
@@ -307,7 +446,7 @@
 								>{/if}
 						</div>{/each}
 				</div>
-				<div class="invoice-total"><span>Total due</span><strong>{total} USDC</strong></div>
+				<div class="invoice-total"><span>Total due</span><strong>{total} {asset}</strong></div>
 				<label for="invoice-notes">Payment notes <span>optional</span></label><textarea
 					id="invoice-notes"
 					bind:value={notes}
@@ -529,6 +668,82 @@
 		gap: 9px;
 		margin-top: 20px;
 	}
+	.detail-dialog {
+		width: min(680px, 100%);
+	}
+	.detail-summary {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		margin-top: 20px;
+		border: 1px solid #dce4e6;
+		background: #dce4e6;
+	}
+	.detail-summary > div {
+		display: grid;
+		gap: 4px;
+		padding: 14px;
+		background: #fff;
+	}
+	.detail-summary span,
+	.detail-section > span {
+		color: #75838a;
+		font-size: 0.62rem;
+		font-weight: 750;
+		text-transform: uppercase;
+	}
+	.detail-summary strong {
+		font-size: 0.76rem;
+	}
+	.detail-section {
+		margin-top: 18px;
+	}
+	.detail-heading,
+	.detail-line,
+	.wallet-address,
+	.payment-url {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.detail-heading {
+		margin-bottom: 6px;
+		font-size: 0.68rem;
+		font-weight: 750;
+	}
+	.detail-line {
+		border-top: 1px solid #e2e8e9;
+		padding: 12px 0;
+		font-size: 0.72rem;
+	}
+	.detail-line div {
+		display: grid;
+		gap: 3px;
+	}
+	.detail-line span,
+	.detail-section p {
+		color: #6e7c83;
+		font-size: 0.66rem;
+	}
+	.wallet-address,
+	.payment-url {
+		margin-top: 7px;
+		border: 1px solid #dce4e6;
+		padding: 10px 11px;
+	}
+	.wallet-address code,
+	.payment-url code {
+		min-width: 0;
+		overflow-wrap: anywhere;
+		font-size: 0.68rem;
+	}
+	.payment-url code {
+		flex: 1;
+	}
+	.fresh-link {
+		margin-top: 7px;
+	}
 	@media (max-width: 620px) {
 		.invoice-dialog {
 			padding: 23px 16px;
@@ -547,6 +762,9 @@
 		}
 		.dialog-actions .button {
 			width: 100%;
+		}
+		.detail-summary {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>
