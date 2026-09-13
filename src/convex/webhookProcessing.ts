@@ -5,12 +5,14 @@ import type { Id } from './_generated/dataModel';
 import { postBalancedEntry } from './lib/ledger';
 import {
 	BASE_SEPOLIA,
+	assetDecimals,
 	decimalToUnits,
 	deterministicRunKey,
 	normalizeDecimal,
 	normalizeEvmAddress,
 	unitsToDecimal
 } from '../lib/domain';
+import type { Asset } from '../lib/domain';
 
 function asString(value: unknown): string | undefined {
 	if (typeof value === 'string' && value.trim()) return value.trim();
@@ -113,6 +115,8 @@ export const processReceipt = internalMutation({
 				''
 			).toLowerCase();
 			const isUsdc = asset === 'usdc' || asset === BASE_SEPOLIA.usdc.toLowerCase();
+			const isEth = asset === 'eth' || asset === 'ethereum' || asset === 'native';
+			const depositAsset: Asset | undefined = isUsdc ? 'USDC' : isEth ? 'ETH' : undefined;
 			const supportedChain = officialFundsDeposit
 				? asString(data.caip2) === BASE_SEPOLIA.caip2
 				: true;
@@ -135,10 +139,13 @@ export const processReceipt = internalMutation({
 
 			let amount: string | undefined;
 			try {
+				const decimals = depositAsset ? assetDecimals(depositAsset) : 0;
 				amount = rawAmount
-					? officialFundsDeposit
-						? unitsToDecimal(rawAmount, 6)
-						: normalizeDecimal(rawAmount, 6)
+					? depositAsset
+						? officialFundsDeposit
+							? unitsToDecimal(rawAmount, decimals)
+							: normalizeDecimal(rawAmount, decimals)
+						: undefined
 					: undefined;
 			} catch {
 				// An unrecognized amount must never become a transfer.
@@ -156,14 +163,15 @@ export const processReceipt = internalMutation({
 							.first()
 					: null;
 
-			if (isUsdc && supportedChain && amount && sourceWallet) {
+			if (depositAsset && supportedChain && amount && sourceWallet) {
 				if (sourceWallet.invoiceId && rawAmount) {
 					const invoice = await ctx.db.get(sourceWallet.invoiceId);
 					const existingPayment = await ctx.db
 						.query('invoicePayments')
 						.withIndex('by_receipt', (q) => q.eq('webhookReceiptId', receipt._id))
 						.unique();
-					if (invoice && !existingPayment) {
+					if (invoice && invoice.asset === depositAsset && !existingPayment) {
+						const decimals = assetDecimals(depositAsset);
 						const transactionHash =
 							asString(data.transaction_hash) ?? asString(data.tx_hash) ?? 'unavailable';
 						const sender = asString(data.sender) ?? 'unavailable';
@@ -174,7 +182,7 @@ export const processReceipt = internalMutation({
 							invoiceId: invoice._id,
 							walletId: sourceWallet._id,
 							webhookReceiptId: receipt._id,
-							asset: 'USDC',
+							asset: depositAsset,
 							amount,
 							rawAmount,
 							transactionHash,
@@ -185,12 +193,13 @@ export const processReceipt = internalMutation({
 									: undefined,
 							receivedAt: Date.now()
 						});
-						const paidUnits = decimalToUnits(invoice.paidAmount, 6) + decimalToUnits(amount, 6);
-						const invoiceUnits = decimalToUnits(invoice.amount, 6);
-						const incomingUnits = decimalToUnits(amount, 6);
+						const paidUnits =
+							decimalToUnits(invoice.paidAmount, decimals) + decimalToUnits(amount, decimals);
+						const invoiceUnits = decimalToUnits(invoice.amount, decimals);
+						const incomingUnits = decimalToUnits(amount, decimals);
 						const outstandingUnits =
-							invoiceUnits > decimalToUnits(invoice.paidAmount, 6)
-								? invoiceUnits - decimalToUnits(invoice.paidAmount, 6)
+							invoiceUnits > decimalToUnits(invoice.paidAmount, decimals)
+								? invoiceUnits - decimalToUnits(invoice.paidAmount, decimals)
 								: 0n;
 						const receivableUnits =
 							incomingUnits < outstandingUnits ? incomingUnits : outstandingUnits;
@@ -202,7 +211,7 @@ export const processReceipt = internalMutation({
 									? 'paid'
 									: 'partiallyPaid';
 						await ctx.db.patch(invoice._id, {
-							paidAmount: unitsToDecimal(paidUnits.toString(), 6),
+							paidAmount: unitsToDecimal(paidUnits.toString(), decimals),
 							status: nextStatus,
 							updatedAt: Date.now()
 						});
@@ -218,10 +227,10 @@ export const processReceipt = internalMutation({
 								sourceId: payment._id,
 								debitAccount: `Wallet:collection:${sourceWallet._id}`,
 								creditAccount: 'Accounts receivable',
-								asset: 'USDC',
+								asset: depositAsset,
 								amount,
-								receivableAmount: unitsToDecimal(receivableUnits.toString(), 6),
-								customerDepositAmount: unitsToDecimal(depositUnits.toString(), 6),
+								receivableAmount: unitsToDecimal(receivableUnits.toString(), decimals),
+								customerDepositAmount: unitsToDecimal(depositUnits.toString(), decimals),
 								transactionHash,
 								occurredAt: Date.now()
 							});
@@ -235,7 +244,7 @@ export const processReceipt = internalMutation({
 							correlationId: `invoice:${invoice._id}`,
 							privyIds: [sourceWallet.privyWalletId],
 							transactionHash,
-							metadata: { amount, asset: 'USDC', sourceEventId: receipt.svixMessageId },
+							metadata: { amount, asset: depositAsset, sourceEventId: receipt.svixMessageId },
 							occurredAt: Date.now()
 						});
 					}
@@ -248,6 +257,7 @@ export const processReceipt = internalMutation({
 					if (
 						automation.type !== 'depositSweep' ||
 						automation.status !== 'active' ||
+						automation.asset !== depositAsset ||
 						automation.sourceWalletId !== sourceWallet._id
 					)
 						continue;
@@ -279,7 +289,7 @@ export const processReceipt = internalMutation({
 						resourceId: String(runId),
 						correlationId: runKey,
 						privyIds: [sourceWallet.privyWalletId],
-						metadata: { amount, asset: 'USDC', sourceEventId: receipt.svixMessageId },
+						metadata: { amount, asset: depositAsset, sourceEventId: receipt.svixMessageId },
 						occurredAt: Date.now()
 					});
 				}

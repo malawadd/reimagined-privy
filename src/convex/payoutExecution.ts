@@ -5,6 +5,7 @@ import { internalAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { providerResourceId } from '../lib/privy';
 import { assertAutomationExecutionBinding } from '../lib/payout-domain';
+import { isDefinitiveProviderRejection, providerErrorCode } from '../lib/provider-errors';
 import { createPrivyGateway } from './privy/gateway';
 
 export const execute = internalAction({
@@ -94,7 +95,7 @@ export const execute = internalAction({
 		} catch (error) {
 			const errorCode = providerErrorCode(error);
 			await ctx.runMutation(
-				providerCallStarted
+				providerCallStarted && !isDefinitiveProviderRejection(error)
 					? internal.payoutAttemptState.markAmbiguous
 					: internal.payoutAttemptState.markFailed,
 				{ attemptId: bundle.attempt._id, errorCode }
@@ -103,9 +104,3 @@ export const execute = internalAction({
 		return null;
 	}
 });
-
-function providerErrorCode(error: unknown) {
-	if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string')
-		return `privy:${error.code}`;
-	return error instanceof Error ? error.message.slice(0, 120) : 'privy_request_failed';
-}

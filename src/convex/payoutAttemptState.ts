@@ -133,7 +133,7 @@ export const markFailed = internalMutation({
 	returns: v.null(),
 	handler: async (ctx, args) => {
 		const attempt = await ctx.db.get(args.attemptId);
-		if (!attempt || attempt.status === 'failed' || attempt.status === 'ambiguous') return null;
+		if (!attempt || attempt.status === 'failed') return null;
 		assertAttemptTransition(attempt.status, 'failed');
 		await ctx.db.patch(attempt._id, {
 			status: 'failed',
@@ -142,10 +142,10 @@ export const markFailed = internalMutation({
 		});
 		const operation = await ctx.db.get(attempt.operationId);
 		if (operation) {
-			await ctx.db.patch(operation._id, {
+			await ctx.scheduler.runAfter(0, internal.operationState.updateOperationStatus, {
+				operationId: operation._id,
 				status: 'failed',
-				errorCode: args.errorCode,
-				updatedAt: Date.now()
+				errorCode: args.errorCode
 			});
 			await syncItemAndRun(ctx, operation.sourceBatchItemId, 'failed', args.errorCode);
 		}

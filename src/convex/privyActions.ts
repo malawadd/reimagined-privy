@@ -5,6 +5,7 @@ import { internalAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { createPrivyGateway } from './privy/gateway';
 import { compileSweepPolicy } from '../lib/policy';
+import { activeAutomationPolicyAllows, activeSweepPolicyAllows } from '../lib/payout-domain';
 
 function providerErrorCode(error: unknown) {
 	if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string')
@@ -104,6 +105,7 @@ export const provisionInvoiceCollection = internalAction({
 		ownerPolicyId: v.string(),
 		automationSignerId: v.string(),
 		servicePrincipalId: v.id('servicePrincipals'),
+		asset: v.union(v.literal('ETH'), v.literal('USDC')),
 		treasuryDestination: v.string(),
 		actorId: v.string()
 	},
@@ -112,7 +114,7 @@ export const provisionInvoiceCollection = internalAction({
 		const correlationId = `invoice-wallet:${args.invoiceId}`;
 		try {
 			const gateway = createPrivyGateway();
-			const sweepPolicy = compileSweepPolicy(args.treasuryDestination);
+			const sweepPolicy = compileSweepPolicy(args.treasuryDestination, args.asset);
 			const policyProvider = await gateway.createPolicy({
 				...sweepPolicy,
 				owner_id: args.ownerQuorumId,
@@ -161,6 +163,7 @@ export const provisionInvoiceCollection = internalAction({
 				invoiceId: args.invoiceId,
 				walletId,
 				servicePrincipalId: args.servicePrincipalId,
+				asset: args.asset,
 				treasuryDestination: args.treasuryDestination
 			});
 		} catch (error) {
@@ -315,6 +318,29 @@ export const executeAutomationRun = internalAction({
 		try {
 			const amount = bundle.run.amount ?? bundle.automation.amount;
 			if (!amount) throw new Error('automation_amount_missing');
+			const keyId = process.env.PRIVY_AUTHORIZATION_KEY_ID;
+			if (
+				!keyId ||
+				bundle.principal.privyAuthorizationKeyId !== keyId ||
+				!bundle.wallet.signerIds.includes(keyId)
+			)
+				throw new Error('automation_signer_binding_invalid');
+			const policyAllows =
+				bundle.automation.type === 'depositSweep'
+					? activeSweepPolicyAllows({
+							policies: bundle.policies,
+							walletPolicyIds: bundle.wallet.policyIds,
+							asset: bundle.automation.asset,
+							destination: bundle.automation.destination
+						})
+					: activeAutomationPolicyAllows({
+							policies: bundle.policies,
+							walletPolicyIds: bundle.wallet.policyIds,
+							asset: bundle.automation.asset,
+							amount,
+							destination: bundle.automation.destination
+						});
+			if (!policyAllows) throw new Error('automation_policy_binding_invalid');
 			const operationId = await ctx.runMutation(internal.automationMaterialize.createOperation, {
 				runId: args.runId
 			});
@@ -322,7 +348,7 @@ export const executeAutomationRun = internalAction({
 			if (!key) throw new Error('automation_signer_not_configured');
 			const provider = await createPrivyGateway().transfer({
 				walletId: bundle.wallet.privyWalletId,
-				asset: 'USDC',
+				asset: bundle.automation.asset,
 				amount,
 				destination: bundle.automation.destination,
 				idempotencyKey: bundle.run.runKey,
