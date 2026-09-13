@@ -1,0 +1,593 @@
+openapi: 3.1.0
+info:
+  title: Ratib Developer API
+  version: 1.0.0-alpha.1
+  summary: Approval-bound access to Ratib financial operations
+  description: |
+    Ratib service accounts use customer-held P-256 keys. Every request is signed and
+    scoped to one organization. API credentials can initiate operations but cannot
+    approve Privy intents, change wallet authority, or act as Privy signers.
+servers:
+  - url: https://{deployment}.convex.site/v1
+    variables:
+      deployment:
+        default: your-ratib-deployment
+tags:
+  - name: Organization
+  - name: Wallets
+  - name: Operations
+  - name: Payments
+  - name: Finance
+  - name: Audit
+  - name: Webhooks
+paths:
+  /auth/token:
+    post:
+      operationId: createAccessToken
+      tags: [Organization]
+      summary: Exchange a signed request for a ten-minute bearer token
+      description: This endpoint only accepts asymmetric request authentication.
+      parameters:
+        &signedHeaders [
+          { $ref: '#/components/parameters/KeyId' },
+          { $ref: '#/components/parameters/Timestamp' },
+          { $ref: '#/components/parameters/Nonce' },
+          { $ref: '#/components/parameters/ContentDigest' },
+          { $ref: '#/components/parameters/Signature' }
+        ]
+      responses:
+        '200':
+          description: Short-lived access token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token, token_type, expires_in]
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, const: Bearer }
+                  expires_in: { type: integer, const: 600 }
+        '401': { $ref: '#/components/responses/Problem' }
+  /organization:
+    get:
+      operationId: getOrganization
+      tags: [Organization]
+      summary: Get the service account organization
+      x-ratib-scope: org:read
+      parameters:
+        [
+          { $ref: '#/components/parameters/KeyId' },
+          { $ref: '#/components/parameters/Timestamp' },
+          { $ref: '#/components/parameters/Nonce' },
+          { $ref: '#/components/parameters/ContentDigest' },
+          { $ref: '#/components/parameters/Signature' }
+        ]
+      responses:
+        '200': { $ref: '#/components/responses/Organization' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /wallets:
+    get:
+      operationId: listWallets
+      tags: [Wallets]
+      summary: List wallets visible to the service account
+      x-ratib-scope: wallets:read
+      parameters:
+        [
+          { $ref: '#/components/parameters/KeyId' },
+          { $ref: '#/components/parameters/Timestamp' },
+          { $ref: '#/components/parameters/Nonce' },
+          { $ref: '#/components/parameters/ContentDigest' },
+          { $ref: '#/components/parameters/Signature' }
+        ]
+      responses:
+        '200':
+          description: Wallet list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Wallet' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /operations:
+    get:
+      operationId: listOperations
+      tags: [Operations]
+      summary: List recent operations
+      x-ratib-scope: operations:read
+      parameters:
+        [
+          { $ref: '#/components/parameters/KeyId' },
+          { $ref: '#/components/parameters/Timestamp' },
+          { $ref: '#/components/parameters/Nonce' },
+          { $ref: '#/components/parameters/ContentDigest' },
+          { $ref: '#/components/parameters/Signature' }
+        ]
+      responses:
+        '200':
+          description: Operation list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Operation' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /operations/{operationId}:
+    get:
+      operationId: getOperation
+      tags: [Operations]
+      summary: Get an operation
+      x-ratib-scope: operations:read
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema: { type: string }
+        - { $ref: '#/components/parameters/KeyId' }
+        - { $ref: '#/components/parameters/Timestamp' }
+        - { $ref: '#/components/parameters/Nonce' }
+        - { $ref: '#/components/parameters/ContentDigest' }
+        - { $ref: '#/components/parameters/Signature' }
+      responses:
+        '200':
+          description: Operation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Operation' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /payments:
+    post:
+      operationId: createPayment
+      tags: [Payments]
+      summary: Create an approval-bound Base Sepolia payment operation
+      description: |
+        The service account must be explicitly restricted to the source wallet. This
+        endpoint always creates a Privy intent path; the API credential cannot sign or
+        approve the resulting intent.
+      x-ratib-scope: payments:create
+      parameters:
+        - { $ref: '#/components/parameters/KeyId' }
+        - { $ref: '#/components/parameters/Timestamp' }
+        - { $ref: '#/components/parameters/Nonce' }
+        - { $ref: '#/components/parameters/ContentDigest' }
+        - { $ref: '#/components/parameters/Signature' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePayment' }
+      responses:
+        '202':
+          description: A new operation was queued
+          headers:
+            Location: { schema: { type: string } }
+            X-Request-Id: { $ref: '#/components/headers/RequestId' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, deduplicated]
+                properties:
+                  data: { $ref: '#/components/schemas/Operation' }
+                  deduplicated: { type: boolean, const: false }
+        '200':
+          description: The original response for this idempotency key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, deduplicated]
+                properties:
+                  data: { $ref: '#/components/schemas/Operation' }
+                  deduplicated: { type: boolean, const: true }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /invoices:
+    get:
+      operationId: listInvoices
+      tags: [Finance]
+      summary: List invoices visible to the service account
+      x-ratib-scope: invoices:read
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /batches:
+    get:
+      operationId: listBatches
+      tags: [Finance]
+      summary: List non-payroll payment batches
+      x-ratib-scope: batches:read
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /payroll:
+    get:
+      operationId: listPayroll
+      tags: [Finance]
+      summary: List payroll batches
+      x-ratib-scope: payroll:read
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /payouts:
+    get:
+      operationId: listPayouts
+      tags: [Finance]
+      summary: List bill and expense payouts
+      x-ratib-scope: batches:read
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /reports/finance:
+    get:
+      operationId: getFinanceReport
+      tags: [Finance]
+      summary: Get the trailing 30-day finance report
+      description: |
+        Aggregates honor the service account's wallet restrictions. The response
+        includes completeness metadata; consumers must treat `complete: false` as
+        a partial result and inspect `truncatedSources`.
+      x-ratib-scope: audit:read
+      parameters: *signedHeaders
+      responses:
+        '200':
+          description: Wallet-scoped finance aggregates with explicit completeness metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/FinanceReport' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /audit-events:
+    get:
+      operationId: listAuditEvents
+      tags: [Audit]
+      summary: List redacted append-only audit events
+      x-ratib-scope: audit:read
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /webhook-endpoints:
+    get:
+      operationId: listWebhookEndpoints
+      tags: [Webhooks]
+      summary: List configured webhook endpoints
+      x-ratib-scope: webhooks:manage
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createWebhookEndpoint
+      tags: [Webhooks]
+      summary: Create an idempotent webhook endpoint
+      x-ratib-scope: webhooks:manage
+      parameters:
+        - { $ref: '#/components/parameters/KeyId' }
+        - { $ref: '#/components/parameters/Timestamp' }
+        - { $ref: '#/components/parameters/Nonce' }
+        - { $ref: '#/components/parameters/ContentDigest' }
+        - { $ref: '#/components/parameters/Signature' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url, eventTypes]
+              properties:
+                url: { type: string, format: uri }
+                eventTypes: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        '201': { $ref: '#/components/responses/Object' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /webhook-deliveries:
+    get:
+      operationId: listWebhookDeliveries
+      tags: [Webhooks]
+      summary: List webhook delivery status
+      x-ratib-scope: webhooks:manage
+      parameters: *signedHeaders
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /webhook-deliveries/{deliveryId}/replay:
+    post:
+      operationId: replayWebhookDelivery
+      tags: [Webhooks]
+      summary: Replay one prior delivery without creating a new domain event
+      x-ratib-scope: webhooks:manage
+      parameters:
+        - { $ref: '#/components/parameters/KeyId' }
+        - { $ref: '#/components/parameters/Timestamp' }
+        - { $ref: '#/components/parameters/Nonce' }
+        - { $ref: '#/components/parameters/ContentDigest' }
+        - { $ref: '#/components/parameters/Signature' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - name: deliveryId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, maxProperties: 0 }
+      responses:
+        '202': { $ref: '#/components/responses/Object' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+components:
+  parameters:
+    KeyId:
+      name: X-Ratib-Key-Id
+      in: header
+      required: true
+      schema: { type: string, pattern: '^rcred_[A-Za-z0-9_-]{16,80}$' }
+    Timestamp:
+      name: X-Ratib-Timestamp
+      in: header
+      required: true
+      description: Unix time in milliseconds, within five minutes of Ratib time.
+      schema: { type: string, pattern: '^\\d{13}$' }
+    Nonce:
+      name: X-Ratib-Nonce
+      in: header
+      required: true
+      description: Unique value for this signed request. Reuse is rejected.
+      schema: { type: string, minLength: 16, maxLength: 120 }
+    ContentDigest:
+      name: X-Ratib-Content-SHA256
+      in: header
+      required: true
+      description: Base64url SHA-256 of the exact request body, including an empty GET body.
+      schema: { type: string }
+    Signature:
+      name: X-Ratib-Signature
+      in: header
+      required: true
+      description: ES256 signature over the canonical request described in the integration guide.
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 12, maxLength: 100, pattern: '^[A-Za-z0-9:_-]+$' }
+  headers:
+    RequestId:
+      schema: { type: string }
+      description: Ratib request correlation ID.
+  responses:
+    List:
+      description: Resource list
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: { type: array, items: {} }
+    Object:
+      description: Resource object
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data: { type: object }
+    Organization:
+      description: Organization
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/RequestId' }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [data]
+            properties:
+              data:
+                type: object
+                required: [id, name, slug, active]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  slug: { type: string }
+                  active: { type: boolean, const: true }
+    Problem:
+      description: Request failed
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/RequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Wallet:
+      type: object
+      required: [id, name, address, chain, chainId, syncedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        address: { type: string, pattern: '^0x[0-9a-f]{40}$' }
+        chain: { type: string, const: base_sepolia }
+        chainId: { type: integer, const: 84532 }
+        purpose: { type: [string, 'null'] }
+        syncedAt: { type: string, format: date-time }
+    Operation:
+      type: object
+      required: [id, kind, status, reference, correlationId, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        status:
+          {
+            type: string,
+            enum:
+              [
+                draft,
+                queued,
+                pendingApproval,
+                executing,
+                pendingConfirmation,
+                succeeded,
+                rejected,
+                expired,
+                failed,
+                cancelled
+              ]
+          }
+        asset: { type: [string, 'null'], enum: [ETH, USDC, null] }
+        amount: { type: [string, 'null'] }
+        destination: { type: [string, 'null'] }
+        memo: { type: [string, 'null'] }
+        reference: { type: string }
+        sourceWalletId: { type: [string, 'null'] }
+        correlationId: { type: string }
+        errorCode: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreatePayment:
+      type: object
+      additionalProperties: false
+      required: [walletId, asset, amount, destination, reference]
+      properties:
+        walletId: { type: string }
+        asset: { type: string, enum: [ETH, USDC] }
+        amount:
+          type: string
+          description: A positive decimal string; zero is rejected.
+          pattern: '^(?=.*[1-9])(?:0|[1-9]\\d*)(?:\\.\\d+)?$'
+        destination: { type: string, pattern: '^0x[0-9a-fA-F]{40}$' }
+        reference: { type: string, minLength: 1, maxLength: 80 }
+        memo: { type: string, maxLength: 140 }
+    Problem:
+      type: object
+      required: [type, code, message, requestId]
+      properties:
+        type: { type: string, format: uri }
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+    FinanceReport:
+      type: object
+      required:
+        [
+          period,
+          inflows,
+          outflows,
+          outstandingReceivablesUsdc,
+          openPayablesUsdc,
+          operationCount,
+          succeededCount,
+          pendingCount,
+          failedCount,
+          completeness
+        ]
+      properties:
+        period:
+          type: object
+          required: [from, to, days]
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+            days: { type: integer, const: 30 }
+        inflows:
+          type: array
+          items: { $ref: '#/components/schemas/AssetTotal' }
+        outflows:
+          type: array
+          items: { $ref: '#/components/schemas/AssetTotal' }
+        outstandingReceivablesUsdc: { type: string }
+        openPayablesUsdc: { type: string }
+        operationCount: { type: integer, minimum: 0 }
+        succeededCount: { type: integer, minimum: 0 }
+        pendingCount: { type: integer, minimum: 0 }
+        failedCount: { type: integer, minimum: 0 }
+        completeness:
+          type: object
+          required:
+            [
+              complete,
+              truncated,
+              truncatedSources,
+              walletRestrictionApplied,
+              sourceRows,
+              sourceLimits
+            ]
+          properties:
+            complete: { type: boolean }
+            truncated: { type: boolean }
+            truncatedSources:
+              type: array
+              items:
+                type: string
+                enum: [ledgerEntries, operations, invoices, payables]
+            walletRestrictionApplied: { type: boolean }
+            sourceRows:
+              type: object
+              additionalProperties: { type: integer, minimum: 0 }
+            sourceLimits:
+              type: object
+              additionalProperties: { type: integer, minimum: 1 }
+    AssetTotal:
+      type: object
+      required: [asset, amount]
+      properties:
+        asset: { type: string, enum: [ETH, USDC] }
+        amount: { type: string }
+webhooks:
+  domainEvent:
+    post:
+      summary: Ratib domain event delivery
+      description: |
+        Ratib signs `{event-id}.{timestamp}.{raw-body}` with the platform ES256 key.
+        Resolve `kid` through `/v1/.well-known/webhook-jwks.json`. Delivery is
+        at least once; deduplicate on X-Ratib-Event-Id and order per aggregate sequence.
+      parameters:
+        - { name: X-Ratib-Event-Id, in: header, required: true, schema: { type: string } }
+        - { name: X-Ratib-Delivery-Id, in: header, required: true, schema: { type: string } }
+        - { name: X-Ratib-Timestamp, in: header, required: true, schema: { type: string } }
+        - { name: X-Ratib-Signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type, schemaVersion, occurredAt, aggregate, data]
+              properties:
+                id: { type: string }
+                type: { type: string }
+                schemaVersion: { type: integer, const: 1 }
+                occurredAt: { type: string, format: date-time }
+                aggregate:
+                  type: object
+                  required: [type, id, sequence]
+                  properties:
+                    type: { type: string }
+                    id: { type: string }
+                    sequence: { type: integer, minimum: 1 }
+                data: { type: object }
+      responses:
+        '200': { description: Event accepted }
