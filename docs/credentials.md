@@ -30,7 +30,7 @@ The App ID and Client ID are browser-visible identifiers. Every other value is a
 
 The setup script already generated a valid P-256 key using Privy's installed Node SDK. Register the contents of `.local/privy-authorization-public.txt` from the Privy Dashboard **Authorization Keys** page. Keep the corresponding private key inside Convex; it is already loaded locally as `PRIVY_AUTHORIZATION_PRIVATE_KEY`.
 
-The live smoke harness can instead register that public key in a development-only 1-of-1 key quorum automatically. This is useful for validating API contracts, but it is not a substitute for the 2-of-3 human reviewer quorum used by the showcase.
+The live smoke harness can instead register that public key in a development-only 1-of-1 key quorum automatically. This is useful for validating API contracts, but it is isolated from the in-app member quorum configured for each customer wallet.
 
 For a real production environment, generate a separate P-256 key, register only its public half, and store its private half in the production Convex deployment or a supported KMS. Never reuse the local-development signer.
 

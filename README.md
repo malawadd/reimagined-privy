@@ -20,14 +20,16 @@ Before signing in, set the browser-safe values from `.env.example` and load the 
 
 ## Product surface
 
-- Controlled pilot enrollment and operator activation
+- Self-service organization creation and durable treasury provisioning
 - Live Base Sepolia treasury and invoice collection wallets
 - Approved counterparties and exact-confirmation ETH/USDC payments
 - Native Privy intent routing, reviewer quorum visibility, and reconciliation
 - USDC invoices, public payment links, deposit webhooks, and policy-owned sweeps
-- Bills, expenses, receipt storage, payment batches, and payroll runs
+- Bills, expenses, versioned payout runs, payroll CSV import, compensation snapshots, and retry
 - Scheduled automations with deterministic execution keys
-- Double-entry operational ledger, CSV exports, and append-only audit events
+- Controlled accounting books, reviewed journals, close periods, reconciliation, and reports
+- ERPNext connection and synchronization managed inside Ratib
+- Signed `/v1` service-account API, idempotent writes, domain webhooks, and delivery replay
 
 Application roles never confer Privy signing authority. Privy owners, policies, signers, and reviewer quorums remain the final transaction authority.
 
@@ -46,4 +48,4 @@ Application roles never confer Privy signing authority. Privy owners, policies, 
 
 ## Scope
 
-Base Sepolia is the only executable v1 network: chain ID `84532`, CAIP-2 `eip155:84532`, and Circle USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`. Mainnet, fiat rails, KYB/KYC, swaps, bridges, banking data, and per-organization accounting OAuth are not simulated. They require audited adapters and appropriate regulated or secret-vault infrastructure.
+Base Sepolia is the only executable wallet network: chain ID `84532`, CAIP-2 `eip155:84532`, and Circle USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`. Mainnet, production fiat rails, cards, KYB/KYC, swaps, bridges, and tax-lot accounting remain disabled. ERPNext is the first organization-managed connector. Its prototype saved-credential option encrypts the secret with a Convex-only AES-256-GCM wrapping key; admins can instead use a transient credential for a single request.

@@ -6,10 +6,10 @@ This repository is a security-sensitive B2B operations starter. Read the closest
 
 1. Every business record and every public Convex function is organization-scoped. Resolve the Privy DID from `ctx.auth`, resolve the local user, require an active membership, then enforce the capability. Never accept a user ID or role from the client.
 2. Client guards are presentation only. Convex authorization is the boundary.
-3. Application roles and Privy authority are distinct. An `approver` can view pending work but cannot sign unless that human is also a Privy Dashboard reviewer in the owner quorum.
+3. Application roles and Privy authority are distinct. An `approver` can view pending work but cannot sign unless that human is also a Privy owner-quorum member. Customer approval and quorum workflows stay inside Ratib.
 4. Privy is the final policy authority. A local preview explains routing; it never grants permission.
 5. Wallet owner, signer, display-name, and policy changes use native intents. Do not add direct privileged update paths.
-6. Automation keys, app secrets, webhook secrets, JWT private keys, access tokens, and authorization signatures are Convex environment variables only. Never persist or log them.
+6. Automation keys, Privy/app secrets, webhook secrets, JWT private keys, access tokens, and authorization signatures are Convex environment variables only. Never persist or log them. The sole prototype exception is organization-approved ERPNext credentials encrypted inside a Node action with AES-256-GCM under a Convex-only wrapping key; never return ciphertext publicly and erase it on disconnect.
 7. Store monetary values as validated decimal strings. Convert with `bigint`; never use floating point.
 8. Base Sepolia is the only executable v1 network: chain ID `84532`, CAIP-2 `eip155:84532`, transfer chain `base_sepolia`, Circle USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`.
 9. Provider side effects are at-most-once. Insert a deterministic run first, atomically claim it, use its run key for idempotency/reference, and reconcile ambiguous results by provider reference before retrying.
@@ -37,4 +37,4 @@ Pure rules require unit tests. Authorization/data changes require `convex-test`.
 
 ## Forbidden shortcuts
 
-No secrets in `PUBLIC_*`, Svelte modules, Convex documents, fixtures, analytics, or errors. No unscoped table scans in public functions. No client-supplied roles. No raw RPC for ordinary payouts. No direct owner/policy mutation. No retry of an ambiguous external write without lookup. No mainnet fallback. No bypass of `PrivyGateway`.
+No secrets in `PUBLIC_*`, Svelte modules, fixtures, analytics, or errors. No unscoped table scans in public functions. No client-supplied roles. No raw RPC for ordinary payouts. No direct owner/policy mutation. No retry of an ambiguous external write without lookup. No mainnet fallback. No bypass of `PrivyGateway`.

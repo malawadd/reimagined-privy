@@ -6,7 +6,7 @@ Observation date: 2026-09-12
 
 - Privy exposes browser authentication and server-side wallet infrastructure as separate concerns. Ratib exchanges a verified Privy access token for a five-minute Convex JWT and never trusts client role claims.
 - Convex custom JWT auth resolves identity inside server functions. Business reads and writes then resolve the local user and active organization membership before capability checks.
-- Competitor onboarding commonly gates treasury functionality behind business verification or sales access. Ratib uses an explicit pilot request followed by a trusted operator activation instead of pretending KYB exists.
+- Competitor onboarding commonly gates treasury functionality behind business verification or sales access. Ratib activates self-service Base Sepolia organizations immediately while clearly labeling regulated KYB, fiat, and mainnet capabilities as unavailable.
 
 ## Ratib decision
 
