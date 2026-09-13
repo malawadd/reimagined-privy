@@ -2,8 +2,21 @@ import { httpRouter } from 'convex/server';
 import { httpAction } from './_generated/server';
 import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
+import { handleDeveloperApiRequest } from './developerApi';
 
 const http = httpRouter();
+
+http.route({
+	pathPrefix: '/v1/',
+	method: 'GET',
+	handler: httpAction(handleDeveloperApiRequest)
+});
+
+http.route({
+	pathPrefix: '/v1/',
+	method: 'POST',
+	handler: httpAction(handleDeveloperApiRequest)
+});
 
 http.route({
 	path: '/auth/exchange',
@@ -77,7 +90,12 @@ http.route({
 	path: '/webhooks/privy',
 	method: 'POST',
 	handler: httpAction(async (ctx, request) => {
+		const declaredLength = Number(request.headers.get('content-length') ?? '0');
+		if (Number.isFinite(declaredLength) && declaredLength > 256_000)
+			return json({ error: 'payload_too_large' }, 413);
 		const rawBody = await request.text();
+		if (new TextEncoder().encode(rawBody).byteLength > 256_000)
+			return json({ error: 'payload_too_large' }, 413);
 		const svixId = request.headers.get('svix-id');
 		const svixTimestamp = request.headers.get('svix-timestamp');
 		const svixSignature = request.headers.get('svix-signature');

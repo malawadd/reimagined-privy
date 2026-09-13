@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
 import { internalMutation } from './_generated/server';
 import { appendAudit } from './lib/audit';
+import { postSourceJournal, prepareSourceJournalReversal } from './lib/accounting';
 
 export const attachCollectionWallet = internalMutation({
 	args: {
@@ -13,12 +14,22 @@ export const attachCollectionWallet = internalMutation({
 	handler: async (ctx, args) => {
 		const invoice = await ctx.db.get(args.invoiceId);
 		if (!invoice) throw new Error('Invoice not found.');
+		if (invoice.status === 'void') return null;
 		if (invoice.collectionWalletId && invoice.collectionWalletId !== args.walletId)
 			throw new Error('Invoice already has a different collection wallet.');
 		await ctx.db.patch(invoice._id, {
 			collectionWalletId: args.walletId,
 			status: 'issued',
 			updatedAt: Date.now()
+		});
+		await postSourceJournal(ctx, {
+			organizationId: invoice.organizationId,
+			sourceKey: `invoice:${invoice._id}:issued`,
+			sourceType: 'invoice',
+			amount: invoice.amount,
+			asset: 'USDC',
+			postingDate: Date.now(),
+			description: `Invoice ${invoice.invoiceNumber} issued`
 		});
 		const existingAutomation = await ctx.db
 			.query('automations')
@@ -57,6 +68,12 @@ export const markProvisioningFailed = internalMutation({
 	handler: async (ctx, args) => {
 		const invoice = await ctx.db.get(args.invoiceId);
 		if (!invoice || invoice.status !== 'provisioning') return null;
+		const reversalJournalId = await prepareSourceJournalReversal(ctx, {
+			organizationId: invoice.organizationId,
+			sourceKey: `invoice:${invoice._id}:issued`,
+			reason: `Invoice ${invoice.invoiceNumber} provisioning failed`,
+			preparedBy: invoice.createdBy
+		});
 		await ctx.db.patch(invoice._id, { status: 'failed', updatedAt: Date.now() });
 		await appendAudit(ctx, {
 			organizationId: invoice.organizationId,
@@ -66,7 +83,9 @@ export const markProvisioningFailed = internalMutation({
 			resourceType: 'invoice',
 			resourceId: invoice._id,
 			correlationId: `invoice:${invoice._id}`,
-			metadata: { reason: args.reason }
+			metadata: reversalJournalId
+				? { reason: args.reason, reversalJournalId }
+				: { reason: args.reason }
 		});
 		return null;
 	}

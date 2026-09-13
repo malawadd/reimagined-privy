@@ -14,5 +14,6 @@ describe('RBAC matrix', () => {
 	it('keeps auditors read only', () => {
 		expect(can('auditor', 'audit:read')).toBe(true);
 		expect(can('auditor', 'payment:create')).toBe(false);
+		expect(can('auditor', 'accounting:review')).toBe(false);
 	});
 });

@@ -125,3 +125,38 @@ export function compileOwnerPolicy(name = 'Base Sepolia treasury owner controls'
 		]
 	};
 }
+
+export function compileSweepPolicy(treasuryDestination: string) {
+	return {
+		version: '1.0' as const,
+		chain_type: 'ethereum' as const,
+		name: 'Base Sepolia invoice collection sweep',
+		rules: [
+			{
+				name: 'Allow USDC collection sweeps to treasury',
+				method: 'transfer',
+				conditions: [
+					{
+						field_source: 'action_request_body',
+						field: 'source.asset',
+						operator: 'eq',
+						value: 'usdc'
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'source.chain',
+						operator: 'eq',
+						value: BASE_SEPOLIA.transferChain
+					},
+					{
+						field_source: 'action_request_body',
+						field: 'destination.address',
+						operator: 'eq',
+						value: normalizeEvmAddress(treasuryDestination)
+					}
+				],
+				action: 'ALLOW' as const
+			}
+		]
+	};
+}

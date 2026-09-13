@@ -1,4 +1,5 @@
 import { v } from 'convex/values';
+import { paginationOptsValidator } from 'convex/server';
 import { query } from './_generated/server';
 import { requireMembership } from './lib/authz';
 import { decimalToUnits, unitsToDecimal } from '../lib/domain';
@@ -103,3 +104,74 @@ export const financeSummary = query({
 		};
 	}
 });
+
+export const exportLedgerPage = query({
+	args: {
+		organizationId: v.id('organizations'),
+		from: v.number(),
+		to: v.number(),
+		paginationOpts: paginationOptsValidator
+	},
+	returns: v.any(),
+	handler: async (ctx, args) => {
+		await requireMembership(ctx, args.organizationId, 'ledger:read');
+		if (!Number.isFinite(args.from) || !Number.isFinite(args.to) || args.from >= args.to)
+			throw new Error('Invalid report period.');
+		const page = await ctx.db
+			.query('ledgerEntries')
+			.withIndex('by_org_time', (q) =>
+				q
+					.eq('organizationId', args.organizationId)
+					.gte('occurredAt', args.from)
+					.lte('occurredAt', args.to)
+			)
+			.order('asc')
+			.paginate(args.paginationOpts);
+		const controlTotals = {
+			ETH: { debit: 0n, credit: 0n },
+			USDC: { debit: 0n, credit: 0n }
+		};
+		for (const entry of page.page)
+			controlTotals[entry.asset][entry.direction] += decimalToUnits(
+				entry.amount,
+				entry.asset === 'USDC' ? 6 : 18
+			);
+		const records = page.page.map((entry) => ({
+			id: entry._id,
+			sourceKey: entry.sourceKey,
+			sourceType: entry.sourceType,
+			account: entry.account,
+			direction: entry.direction,
+			asset: entry.asset,
+			amount: entry.amount,
+			transactionHash: entry.transactionHash ?? null,
+			occurredAt: new Date(entry.occurredAt).toISOString()
+		}));
+		return {
+			records,
+			manifest: {
+				schemaVersion: 1,
+				organizationId: args.organizationId,
+				period: { from: args.from, to: args.to },
+				recordCount: records.length,
+				controlTotals: Object.fromEntries(
+					Object.entries(controlTotals).map(([asset, totals]) => [
+						asset,
+						{
+							debit: unitsToDecimal(totals.debit.toString(), asset === 'USDC' ? 6 : 18),
+							credit: unitsToDecimal(totals.credit.toString(), asset === 'USDC' ? 6 : 18)
+						}
+					])
+				),
+				checksumSha256: await sha256(JSON.stringify(records)),
+				complete: page.isDone,
+				nextCursor: page.continueCursor
+			}
+		};
+	}
+});
+
+async function sha256(value: string) {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}

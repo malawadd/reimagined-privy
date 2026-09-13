@@ -11,8 +11,10 @@ const recipientValidator = v.object({
 	label: v.string(),
 	address: v.string(),
 	assets: v.array(v.union(v.literal('ETH'), v.literal('USDC'))),
-	status: v.union(v.literal('approved'), v.literal('revoked')),
-	createdBy: v.id('users')
+	status: v.union(v.literal('pendingApproval'), v.literal('approved'), v.literal('revoked')),
+	createdBy: v.id('users'),
+	approvedBy: v.optional(v.id('users')),
+	approvedAt: v.optional(v.number())
 });
 
 export const list = query({
@@ -48,12 +50,16 @@ export const create = mutation({
 				q.eq('organizationId', args.organizationId).eq('address', address)
 			)
 			.unique();
-		if (existing?.status === 'approved') throw new Error('Recipient is already approved.');
+		if (existing && existing.status !== 'revoked')
+			throw new Error('Recipient already exists in this organization.');
 		if (existing) {
 			await ctx.db.patch(existing._id, {
 				label,
 				assets: [...new Set(args.assets)],
-				status: 'approved'
+				status: 'pendingApproval',
+				createdBy: user._id,
+				approvedBy: undefined,
+				approvedAt: undefined
 			});
 			return existing._id;
 		}
@@ -62,8 +68,38 @@ export const create = mutation({
 			label,
 			address,
 			assets: [...new Set(args.assets)],
-			status: 'approved',
+			status: 'pendingApproval',
 			createdBy: user._id
+		});
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: 'recipient.approval_requested',
+			resourceType: 'recipient',
+			resourceId: recipientId,
+			correlationId: `recipient:${recipientId}`,
+			metadata: { label, address, assets: args.assets }
+		});
+		return recipientId;
+	}
+});
+
+export const approve = mutation({
+	args: { organizationId: v.id('organizations'), recipientId: v.id('recipients') },
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const { user } = await requireMembership(ctx, args.organizationId, 'policy:manage');
+		const recipient = await ctx.db.get(args.recipientId);
+		assertOrgScoped(recipient, args.organizationId);
+		if (recipient.status !== 'pendingApproval')
+			throw new Error('This counterparty is not waiting for approval.');
+		if (recipient.createdBy === user._id)
+			throw new Error('A different authorized member must approve this counterparty.');
+		await ctx.db.patch(recipient._id, {
+			status: 'approved',
+			approvedBy: user._id,
+			approvedAt: Date.now()
 		});
 		await appendAudit(ctx, {
 			organizationId: args.organizationId,
@@ -71,11 +107,11 @@ export const create = mutation({
 			actorId: user.privyDid,
 			action: 'recipient.approved',
 			resourceType: 'recipient',
-			resourceId: recipientId,
-			correlationId: `recipient:${recipientId}`,
-			metadata: { label, address, assets: args.assets }
+			resourceId: recipient._id,
+			correlationId: `recipient:${recipient._id}`,
+			metadata: { address: recipient.address, requestedBy: recipient.createdBy }
 		});
-		return recipientId;
+		return null;
 	}
 });
 

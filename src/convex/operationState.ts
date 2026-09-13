@@ -11,6 +11,8 @@ import { appendAudit } from './lib/audit';
 import type { GenericMutationCtx } from 'convex/server';
 import type { DataModel, Doc } from './_generated/dataModel';
 import { postOperationEntry } from './lib/ledger';
+import { emitDeveloperEvent } from './developerEvents';
+import { aggregatePayoutRunStatus } from '../lib/payout-domain';
 
 export const saveWallet = internalMutation({
 	args: {
@@ -89,6 +91,21 @@ export const savePolicy = internalMutation({
 	handler: async (ctx, args) => {
 		const provider = args.provider as Record<string, unknown>;
 		const id = String(provider.id);
+		const existing = await ctx.db
+			.query('policies')
+			.withIndex('by_privy_id', (q) => q.eq('privyPolicyId', id))
+			.unique();
+		if (existing) {
+			if (existing.organizationId !== args.organizationId)
+				throw new Error('Provider policy is already associated with another organization.');
+			await ctx.db.patch(existing._id, {
+				name: args.name,
+				kind: args.kind,
+				json: args.json,
+				status: 'active'
+			});
+			return existing._id;
+		}
 		const policyId = await ctx.db.insert('policies', {
 			organizationId: args.organizationId,
 			privyPolicyId: id,
@@ -200,6 +217,8 @@ export const updateOperationStatus = internalMutation({
 			updatedAt: Date.now()
 		});
 		await syncLinkedFinancialRecord(ctx, operation, status);
+		await syncProviderAttempt(ctx, operation, status, args.errorCode);
+		if (status !== operation.status) await emitOperationEvent(ctx, operation, status);
 		return null;
 	}
 });
@@ -272,6 +291,8 @@ export const applyProviderState = internalMutation({
 			status,
 			typeof provider.transaction_hash === 'string' ? provider.transaction_hash : undefined
 		);
+		await syncProviderAttempt(ctx, operation, status);
+		if (status !== operation.status) await emitOperationEvent(ctx, operation, status);
 		await appendAudit(ctx, {
 			organizationId: operation.organizationId,
 			actorType: args.source === 'webhook' ? 'privy' : 'system',
@@ -381,14 +402,79 @@ async function syncLinkedFinancialRecord(
 		const statuses = items.map((batchItem) =>
 			batchItem._id === item._id ? itemStatus : batchItem.status
 		);
-		const batchStatus = statuses.every((value) => value === 'succeeded')
-			? ('completed' as const)
-			: statuses.some((value) => value === 'failed') &&
-				  statuses.every((value) => value === 'failed' || value === 'succeeded')
-				? ('failed' as const)
-				: ('processing' as const);
-		await ctx.db.patch(item.batchId, { status: batchStatus, updatedAt: now });
+		const batchStatus = aggregatePayoutRunStatus(statuses);
+		await ctx.db.patch(item.batchId, {
+			status: batchStatus,
+			failureCode:
+				batchStatus === 'needsAttention'
+					? 'provider_result_ambiguous'
+					: batchStatus === 'failed'
+						? 'all_items_failed'
+						: undefined,
+			updatedAt: now
+		});
 	}
+}
+
+async function syncProviderAttempt(
+	ctx: GenericMutationCtx<DataModel>,
+	operation: Doc<'operations'>,
+	status: Doc<'operations'>['status'],
+	errorCode?: string
+) {
+	const attempt = operation.providerAttemptId
+		? await ctx.db.get(operation.providerAttemptId)
+		: await ctx.db
+				.query('providerAttempts')
+				.withIndex('by_operation', (q) => q.eq('operationId', operation._id))
+				.order('desc')
+				.first();
+	if (!attempt || attempt.organizationId !== operation.organizationId) return;
+	if (status === 'succeeded')
+		await ctx.db.patch(attempt._id, {
+			status: 'confirmed',
+			errorCode: undefined,
+			updatedAt: Date.now()
+		});
+	else if (['failed', 'rejected', 'expired', 'cancelled'].includes(status))
+		await ctx.db.patch(attempt._id, {
+			status: 'failed',
+			errorCode: errorCode ?? operation.errorCode ?? status,
+			updatedAt: Date.now()
+		});
+}
+
+async function emitOperationEvent(
+	ctx: GenericMutationCtx<DataModel>,
+	operation: Doc<'operations'>,
+	status: Doc<'operations'>['status']
+) {
+	const eventType =
+		status === 'pendingApproval'
+			? 'operation.pending_approval'
+			: status === 'executing' || status === 'pendingConfirmation'
+				? 'operation.executing'
+				: status === 'succeeded'
+					? 'operation.succeeded'
+					: ['failed', 'rejected', 'expired', 'cancelled'].includes(status)
+						? 'operation.failed'
+						: null;
+	if (!eventType) return;
+	await emitDeveloperEvent(ctx, {
+		organizationId: operation.organizationId,
+		eventType,
+		aggregateType: 'operation',
+		aggregateId: String(operation._id),
+		data: {
+			id: operation._id,
+			status,
+			kind: operation.kind,
+			asset: operation.asset,
+			amount: operation.amount,
+			destination: operation.destination,
+			correlationId: operation.correlationId
+		}
+	});
 }
 export const markRun = internalMutation({
 	args: {

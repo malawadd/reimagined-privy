@@ -5,6 +5,7 @@ import { assertOrgScoped, requireMembership } from './lib/authz';
 import { decimalToUnits, normalizeDecimal, unitsToDecimal } from '../lib/domain';
 import { generateCapabilityToken, hashCapabilityToken } from '../lib/capability-token';
 import { appendAudit } from './lib/audit';
+import { prepareSourceJournalReversal } from './lib/accounting';
 
 const statusValidator = v.union(
 	v.literal('provisioning'),
@@ -118,13 +119,10 @@ export const createAndIssue = mutation({
 		const ownerPolicy = policies.find(
 			(policy) => policy.kind === 'owner' && policy.status === 'active'
 		);
-		const automationPolicy = policies.find(
-			(policy) => policy.kind === 'signerOverride' && policy.status === 'active'
-		);
 		const principal = principals.find((item) => item.status === 'active');
-		if (!quorum || !ownerPolicy || !automationPolicy || !principal)
+		if (!quorum || !ownerPolicy || !principal)
 			throw new Error(
-				'Invoice collection requires a verified quorum, owner policy, automation policy, and service principal.'
+				'Invoice collection requires a verified quorum, owner policy, and configured Ratib automation signer.'
 			);
 		let totalUnits = 0n;
 		const lineItems = args.lineItems.map((item) => {
@@ -184,7 +182,6 @@ export const createAndIssue = mutation({
 			ownerQuorumId: quorum.privyOwnerId,
 			ownerPolicyId: ownerPolicy.privyPolicyId,
 			automationSignerId: principal.privyAuthorizationKeyId,
-			automationPolicyId: automationPolicy.privyPolicyId,
 			servicePrincipalId: principal._id,
 			treasuryDestination: treasuryWallet.address,
 			actorId: user.privyDid
@@ -219,6 +216,12 @@ export const voidInvoice = mutation({
 		const invoice = await ctx.db.get(args.invoiceId);
 		assertOrgScoped(invoice, args.organizationId);
 		if (invoice.status === 'paid') throw new Error('A paid invoice cannot be voided.');
+		const reversalJournalId = await prepareSourceJournalReversal(ctx, {
+			organizationId: args.organizationId,
+			sourceKey: `invoice:${invoice._id}:issued`,
+			reason: `Invoice ${invoice.invoiceNumber} voided`,
+			preparedBy: user._id
+		});
 		await ctx.db.patch(invoice._id, { status: 'void', updatedAt: Date.now() });
 		await appendAudit(ctx, {
 			organizationId: args.organizationId,
@@ -227,7 +230,8 @@ export const voidInvoice = mutation({
 			action: 'invoice.voided',
 			resourceType: 'invoice',
 			resourceId: invoice._id,
-			correlationId: `invoice:${invoice._id}`
+			correlationId: `invoice:${invoice._id}`,
+			metadata: reversalJournalId ? { reversalJournalId } : {}
 		});
 		return null;
 	}

@@ -4,6 +4,8 @@ import { internal } from './_generated/api';
 import { assertOrgScoped, requireMembership, requireWalletPermission } from './lib/authz';
 import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../lib/domain';
 import { appendAudit } from './lib/audit';
+import { activeAutomationPolicyAllows, payoutAttemptKey } from '../lib/payout-domain';
+import { postSourceJournal } from './lib/accounting';
 
 const payableValidator = v.object({
 	_id: v.id('payables'),
@@ -22,15 +24,116 @@ const payableValidator = v.object({
 	receiptStorageId: v.optional(v.id('_storage')),
 	status: v.union(
 		v.literal('draft'),
+		v.literal('pendingApproval'),
+		v.literal('approved'),
 		v.literal('paymentQueued'),
 		v.literal('paid'),
 		v.literal('failed'),
 		v.literal('void')
 	),
 	operationId: v.optional(v.id('operations')),
+	sourceWalletId: v.optional(v.id('wallets')),
+	approvedBy: v.optional(v.id('users')),
+	approvedAt: v.optional(v.number()),
+	submittedAt: v.optional(v.number()),
 	createdBy: v.id('users'),
 	createdAt: v.number(),
 	updatedAt: v.number()
+});
+
+export const submitForApproval = mutation({
+	args: {
+		organizationId: v.id('organizations'),
+		payableId: v.id('payables'),
+		walletId: v.id('wallets')
+	},
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const { user, wallet } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			args.walletId,
+			'initiate',
+			'payable:manage'
+		);
+		const payable = await ctx.db.get(args.payableId);
+		assertOrgScoped(payable, args.organizationId);
+		if (payable.status !== 'draft') throw new Error('Only a draft payable can be submitted.');
+		if (wallet.purpose === 'collection') throw new Error('Select a treasury wallet.');
+		const recipient = payable.recipientId ? await ctx.db.get(payable.recipientId) : null;
+		if (
+			!recipient ||
+			recipient.organizationId !== args.organizationId ||
+			recipient.status !== 'approved' ||
+			!recipient.assets.includes('USDC') ||
+			recipient.address !== payable.destination
+		)
+			throw new Error('Approve this payable counterparty before submitting it.');
+		const now = Date.now();
+		await ctx.db.patch(payable._id, {
+			status: 'pendingApproval',
+			sourceWalletId: wallet._id,
+			submittedAt: now,
+			updatedAt: now
+		});
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: `${payable.type}.approval_requested`,
+			resourceType: 'payable',
+			resourceId: payable._id,
+			correlationId: `payable:${payable._id}`,
+			metadata: { sourceWalletId: wallet._id }
+		});
+		return null;
+	}
+});
+
+export const approve = mutation({
+	args: { organizationId: v.id('organizations'), payableId: v.id('payables') },
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const payable = await ctx.db.get(args.payableId);
+		assertOrgScoped(payable, args.organizationId);
+		if (!payable.sourceWalletId) throw new Error('Payable source wallet is missing.');
+		const { user } = await requireWalletPermission(
+			ctx,
+			args.organizationId,
+			payable.sourceWalletId,
+			'approve',
+			'payable:read'
+		);
+		if (payable.status !== 'pendingApproval') throw new Error('Payable is not awaiting approval.');
+		if (payable.createdBy === user._id)
+			throw new Error('The payable creator cannot approve the same obligation.');
+		const now = Date.now();
+		await postSourceJournal(ctx, {
+			organizationId: args.organizationId,
+			sourceKey: `payable:${payable._id}:approved`,
+			sourceType: 'payable',
+			amount: payable.amount,
+			asset: 'USDC',
+			postingDate: now,
+			description: `${payable.type === 'bill' ? 'Bill' : 'Expense'} ${payable.reference} approved`
+		});
+		await ctx.db.patch(payable._id, {
+			status: 'approved',
+			approvedBy: user._id,
+			approvedAt: now,
+			updatedAt: now
+		});
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: `${payable.type}.approved`,
+			resourceType: 'payable',
+			resourceId: payable._id,
+			correlationId: `payable:${payable._id}`
+		});
+		return null;
+	}
 });
 
 export const list = query({
@@ -158,30 +261,54 @@ export const queuePayment = mutation({
 		);
 		const payable = await ctx.db.get(args.payableId);
 		assertOrgScoped(payable, args.organizationId);
-		if (payable.status === 'void' || payable.status === 'paid')
-			throw new Error('This payable cannot be queued.');
+		if (!['approved', 'failed'].includes(payable.status))
+			throw new Error('Approve this payable before creating its payment operation.');
+		if (payable.sourceWalletId && payable.sourceWalletId !== wallet._id)
+			throw new Error('Use the treasury wallet selected during payable approval.');
+		let supersedesOperationId: typeof payable.operationId;
 		if (payable.operationId) {
 			const operation = await ctx.db.get(payable.operationId);
-			if (operation?.approvalPath)
-				return { operationId: operation._id, path: operation.approvalPath, deduplicated: true };
-		}
-		const recipient = await ctx.db
-			.query('recipients')
-			.withIndex('by_org_address', (q) =>
-				q.eq('organizationId', args.organizationId).eq('address', payable.destination)
+			if (
+				operation?.approvalPath &&
+				!['failed', 'rejected', 'expired', 'cancelled'].includes(operation.status)
 			)
-			.unique();
+				return { operationId: operation._id, path: operation.approvalPath, deduplicated: true };
+			if (operation) supersedesOperationId = operation._id;
+		}
+		const [recipient, policies] = await Promise.all([
+			ctx.db
+				.query('recipients')
+				.withIndex('by_org_address', (q) =>
+					q.eq('organizationId', args.organizationId).eq('address', payable.destination)
+				)
+				.unique(),
+			ctx.db
+				.query('policies')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100)
+		]);
+		const policyAllowsAutomation =
+			recipient?.status === 'approved' &&
+			recipient.assets.includes('USDC') &&
+			activeAutomationPolicyAllows({
+				policies,
+				walletPolicyIds: wallet.policyIds,
+				amount: payable.amount,
+				destination: payable.destination
+			});
 		const decision = selectPaymentRoute({
 			asset: 'USDC',
 			amount: payable.amount,
 			destination: payable.destination,
-			recipientApproved: recipient?.status === 'approved' && recipient.assets.includes('USDC')
+			recipientApproved: policyAllowsAutomation
 		});
 		if (decision.path === 'blocked')
 			throw new Error('Policy change is required before this payable can execute.');
 		const path = decision.path as 'automationSigner' | 'privyIntent';
 		const now = Date.now();
-		const requestKey = `payable:${payable._id}`;
+		const requestKey = supersedesOperationId
+			? `payable:${payable._id}:retry:${supersedesOperationId}`
+			: `payable:${payable._id}`;
 		const operationId = await ctx.db.insert('operations', {
 			organizationId: args.organizationId,
 			kind: 'payment',
@@ -196,10 +323,20 @@ export const queuePayment = mutation({
 			createdBy: user._id,
 			sourceWalletId: wallet._id,
 			sourcePayableId: payable._id,
+			supersedesOperationId,
 			correlationId: `payment:${args.organizationId}:${requestKey}`,
 			createdAt: now,
 			updatedAt: now
 		});
+		const attemptId = await ctx.db.insert('providerAttempts', {
+			organizationId: args.organizationId,
+			operationId,
+			attemptKey: payoutAttemptKey(operationId),
+			providerKind: path === 'automationSigner' ? 'privyAction' : 'privyIntent',
+			status: 'pending',
+			updatedAt: now
+		});
+		await ctx.db.patch(operationId, { providerAttemptId: attemptId });
 		await ctx.db.patch(payable._id, { status: 'paymentQueued', operationId, updatedAt: now });
 		await appendAudit(ctx, {
 			organizationId: args.organizationId,
@@ -211,9 +348,7 @@ export const queuePayment = mutation({
 			correlationId: `payable:${payable._id}`,
 			metadata: { operationId, path }
 		});
-		await ctx.scheduler.runAfter(0, internal.privyActions.executePayment, {
-			operationId
-		});
+		await ctx.scheduler.runAfter(0, internal.payoutAttemptState.claimAndSchedule, { attemptId });
 		return { operationId, path, deduplicated: false };
 	}
 });
@@ -222,11 +357,20 @@ export const voidPayable = mutation({
 	args: { organizationId: v.id('organizations'), payableId: v.id('payables') },
 	returns: v.null(),
 	handler: async (ctx, args) => {
-		await requireMembership(ctx, args.organizationId, 'payable:manage');
+		const { user } = await requireMembership(ctx, args.organizationId, 'payable:manage');
 		const payable = await ctx.db.get(args.payableId);
 		assertOrgScoped(payable, args.organizationId);
 		if (payable.status !== 'draft') throw new Error('Only draft payables can be voided.');
 		await ctx.db.patch(payable._id, { status: 'void', updatedAt: Date.now() });
+		await appendAudit(ctx, {
+			organizationId: args.organizationId,
+			actorType: 'user',
+			actorId: user.privyDid,
+			action: `${payable.type}.voided`,
+			resourceType: 'payable',
+			resourceId: payable._id,
+			correlationId: `payable:${payable._id}`
+		});
 		return null;
 	}
 });

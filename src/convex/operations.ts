@@ -5,6 +5,7 @@ import { normalizeDecimal, normalizeEvmAddress, selectPaymentRoute } from '../li
 import { internal } from './_generated/api';
 import { appendAudit } from './lib/audit';
 import { operationDocumentValidator } from './lib/validators';
+import { activeAutomationPolicyAllows, payoutAttemptKey } from '../lib/payout-domain';
 
 export const createPayment = mutation({
 	args: {
@@ -44,17 +45,33 @@ export const createPayment = mutation({
 		if (memo && memo.length > 140) throw new Error('Memo must be 140 characters or fewer.');
 		if (!/^[A-Za-z0-9:_-]{12,100}$/.test(requestKey))
 			throw new Error('Invalid payment request key.');
-		const recipient = await ctx.db
-			.query('recipients')
-			.withIndex('by_org_address', (q) =>
-				q.eq('organizationId', args.organizationId).eq('address', destination)
-			)
-			.unique();
+		const [recipient, policies] = await Promise.all([
+			ctx.db
+				.query('recipients')
+				.withIndex('by_org_address', (q) =>
+					q.eq('organizationId', args.organizationId).eq('address', destination)
+				)
+				.unique(),
+			ctx.db
+				.query('policies')
+				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
+				.take(100)
+		]);
+		const policyAllowsAutomation =
+			args.asset === 'USDC' &&
+			recipient?.status === 'approved' &&
+			recipient.assets.includes('USDC') &&
+			activeAutomationPolicyAllows({
+				policies,
+				walletPolicyIds: wallet.policyIds,
+				amount,
+				destination
+			});
 		const decision = selectPaymentRoute({
 			asset: args.asset,
 			amount,
 			destination,
-			recipientApproved: recipient?.status === 'approved' && recipient.assets.includes(args.asset)
+			recipientApproved: policyAllowsAutomation
 		});
 		if (decision.path === 'blocked') throw new Error('policy_change_required');
 		const approvedDecision = {
@@ -67,6 +84,20 @@ export const createPayment = mutation({
 				q.eq('organizationId', args.organizationId).eq('requestKey', requestKey)
 			)
 			.unique();
+		const requestFingerprint = JSON.stringify({
+			walletId: String(wallet._id),
+			asset: args.asset,
+			amount,
+			destination,
+			memo: memo ?? null,
+			reference
+		});
+		if (
+			existing &&
+			existing.requestFingerprint &&
+			existing.requestFingerprint !== requestFingerprint
+		)
+			throw new Error('The idempotency key was already used for a different payment.');
 		if (existing)
 			return { operationId: existing._id, decision: approvedDecision, deduplicated: true };
 		const now = Date.now();
@@ -82,12 +113,22 @@ export const createPayment = mutation({
 			memo,
 			reference,
 			requestKey,
+			requestFingerprint,
 			createdBy: user._id,
 			sourceWalletId: wallet._id,
 			correlationId,
 			createdAt: now,
 			updatedAt: now
 		});
+		const attemptId = await ctx.db.insert('providerAttempts', {
+			organizationId: args.organizationId,
+			operationId,
+			attemptKey: payoutAttemptKey(operationId),
+			providerKind: decision.path === 'automationSigner' ? 'privyAction' : 'privyIntent',
+			status: 'pending',
+			updatedAt: now
+		});
+		await ctx.db.patch(operationId, { providerAttemptId: attemptId });
 		await appendAudit(ctx, {
 			organizationId: args.organizationId,
 			actorType: 'user',
@@ -98,9 +139,7 @@ export const createPayment = mutation({
 			correlationId,
 			metadata: { asset: args.asset, amount, destination, approvalPath: decision.path }
 		});
-		await ctx.scheduler.runAfter(0, internal.privyActions.executePayment, {
-			operationId
-		});
+		await ctx.scheduler.runAfter(0, internal.payoutAttemptState.claimAndSchedule, { attemptId });
 		return { operationId, decision: approvedDecision, deduplicated: false };
 	}
 });

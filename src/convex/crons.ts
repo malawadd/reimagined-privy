@@ -13,4 +13,20 @@ crons.interval(
 	internal.privyActions.reconcilePending
 );
 crons.interval('mark overdue invoices', { hours: 1 }, internal.invoiceState.markOverdue);
+crons.interval(
+	'prune developer API replay records',
+	{ hours: 1 },
+	internal.developerApiData.pruneExpiredSecurityRecords
+);
+crons.interval(
+	'recover expired developer webhook claims',
+	{ minutes: 1 },
+	internal.developerWebhookState.recoverStaleClaims
+);
+crons.interval('dispatch scheduled payout runs', { minutes: 1 }, internal.payouts.dispatchDue);
+crons.interval(
+	'sync due ERPNext connections',
+	{ minutes: 5 },
+	internal.erpnextActions.syncDueConnections
+);
 export default crons;

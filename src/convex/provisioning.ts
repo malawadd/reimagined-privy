@@ -138,7 +138,11 @@ export const recordPolicy = internalMutation({
 });
 
 export const complete = internalMutation({
-	args: { provisioningRunId: v.id('provisioningRuns'), provider: v.any() },
+	args: {
+		provisioningRunId: v.id('provisioningRuns'),
+		provider: v.any(),
+		automationSignerId: v.optional(v.string())
+	},
 	returns: v.id('wallets'),
 	handler: async (ctx, args) => {
 		const run = await ctx.db.get(args.provisioningRunId);
@@ -199,6 +203,39 @@ export const complete = internalMutation({
 				status: 'active',
 				updatedAt: Date.now()
 			});
+		const quorum = await ctx.db
+			.query('reviewerQuorums')
+			.withIndex('by_org', (q) => q.eq('organizationId', run.organizationId))
+			.unique();
+		if (!quorum)
+			await ctx.db.insert('reviewerQuorums', {
+				organizationId: run.organizationId,
+				privyOwnerId: run.privyQuorumId,
+				threshold: 1,
+				reviewerCount: 1,
+				mfaRequired: true,
+				syncedAt: Date.now()
+			});
+		if (args.automationSignerId) {
+			const principals = await ctx.db
+				.query('servicePrincipals')
+				.withIndex('by_org_status', (q) =>
+					q.eq('organizationId', run.organizationId).eq('status', 'active')
+				)
+				.take(10);
+			if (
+				!principals.some(
+					(principal) => principal.privyAuthorizationKeyId === args.automationSignerId
+				)
+			)
+				await ctx.db.insert('servicePrincipals', {
+					organizationId: run.organizationId,
+					name: 'Ratib controlled automation',
+					purpose: 'Policy-bounded Base Sepolia execution',
+					privyAuthorizationKeyId: args.automationSignerId,
+					status: 'active'
+				});
+		}
 		await ctx.db.patch(run._id, {
 			privyWalletId: String(provider.id),
 			walletId: wallet._id,

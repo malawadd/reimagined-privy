@@ -73,6 +73,7 @@ export const operationDocumentValidator = v.object({
 	memo: v.optional(v.string()),
 	reference: v.string(),
 	requestKey: v.optional(v.string()),
+	requestFingerprint: v.optional(v.string()),
 	createdBy: v.optional(v.id('users')),
 	sourceWalletId: v.optional(v.id('wallets')),
 	automationRunId: v.optional(v.id('automationRuns')),
@@ -80,6 +81,8 @@ export const operationDocumentValidator = v.object({
 	sourceBatchItemId: v.optional(v.id('paymentBatchItems')),
 	correlationId: v.string(),
 	errorCode: v.optional(v.string()),
+	supersedesOperationId: v.optional(v.id('operations')),
+	providerAttemptId: v.optional(v.id('providerAttempts')),
 	createdAt: v.number(),
 	updatedAt: v.number()
 });

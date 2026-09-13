@@ -66,7 +66,8 @@ export const execute = internalAction({
 			});
 			await ctx.runMutation(internal.provisioning.complete, {
 				provisioningRunId: run._id,
-				provider: wallet
+				provider: wallet,
+				automationSignerId: process.env.PRIVY_AUTHORIZATION_KEY_ID
 			});
 		} catch (error) {
 			const status = isDefinitiveProviderRejection(error) ? 'failed' : 'ambiguous';

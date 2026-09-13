@@ -14,8 +14,17 @@ export type Capability =
 	| 'payable:read'
 	| 'payable:manage'
 	| 'batch:manage'
+	| 'payroll:read'
+	| 'payroll:manage'
+	| 'payout:read'
+	| 'payout:manage'
 	| 'ledger:read'
 	| 'reconciliation:manage'
+	| 'accounting:prepare'
+	| 'accounting:review'
+	| 'accounting:close'
+	| 'integration:manage'
+	| 'developer:manage'
 	| 'automation:manage'
 	| 'audit:read';
 
@@ -34,8 +43,17 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'payable:read',
 		'payable:manage',
 		'batch:manage',
+		'payroll:read',
+		'payroll:manage',
+		'payout:read',
+		'payout:manage',
 		'ledger:read',
 		'reconciliation:manage',
+		'accounting:prepare',
+		'accounting:review',
+		'accounting:close',
+		'integration:manage',
+		'developer:manage',
 		'automation:manage',
 		'audit:read'
 	],
@@ -52,8 +70,17 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'payable:read',
 		'payable:manage',
 		'batch:manage',
+		'payroll:read',
+		'payroll:manage',
+		'payout:read',
+		'payout:manage',
 		'ledger:read',
 		'reconciliation:manage',
+		'accounting:prepare',
+		'accounting:review',
+		'accounting:close',
+		'integration:manage',
+		'developer:manage',
 		'automation:manage',
 		'audit:read'
 	],
@@ -67,8 +94,13 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'payable:read',
 		'payable:manage',
 		'batch:manage',
+		'payroll:read',
+		'payroll:manage',
+		'payout:read',
+		'payout:manage',
 		'ledger:read',
 		'reconciliation:manage',
+		'accounting:prepare',
 		'automation:manage',
 		'audit:read'
 	],
@@ -78,7 +110,11 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'approval:read',
 		'invoice:read',
 		'payable:read',
+		'payroll:read',
+		'payout:read',
 		'ledger:read',
+		'accounting:review',
+		'accounting:close',
 		'audit:read'
 	],
 	auditor: [
@@ -87,6 +123,8 @@ const permissions: Record<OrgRole, readonly Capability[]> = {
 		'approval:read',
 		'invoice:read',
 		'payable:read',
+		'payroll:read',
+		'payout:read',
 		'ledger:read',
 		'audit:read'
 	]
