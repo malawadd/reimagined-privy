@@ -5,7 +5,7 @@
 	import type { Id } from '../../../convex/_generated/dataModel';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import PayoutRunList from '$lib/components/PayoutRunList.svelte';
-	import { decimalToUnits, unitsToDecimal } from '$lib/domain';
+	import { assetDecimals, decimalToUnits, unitsToDecimal } from '$lib/domain';
 	import { parseCsvRecords } from '$lib/payout-csv';
 	import { workspace } from '$lib/workspace.svelte';
 
@@ -29,6 +29,7 @@
 	const reconcilePayout = useMutation(api.payouts.reconcileItem);
 
 	let name = $state('');
+	let asset = $state<'ETH' | 'USDC'>('ETH');
 	let sourceWalletId = $state('');
 	type PayoutItem = {
 		recipientId: string;
@@ -52,14 +53,16 @@
 
 	let approvedRecipients = $derived(
 		(recipients.data ?? []).filter(
-			(recipient) => recipient.status === 'approved' && recipient.assets.includes('USDC')
+			(recipient) => recipient.status === 'approved' && recipient.assets.includes(asset)
 		)
 	);
 	let total = $derived.by(() => {
 		try {
 			return unitsToDecimal(
-				items.reduce((sum, item) => sum + decimalToUnits(item.amount || '0', 6), 0n).toString(),
-				6
+				items
+					.reduce((sum, item) => sum + decimalToUnits(item.amount || '0', assetDecimals(asset)), 0n)
+					.toString(),
+				assetDecimals(asset)
 			);
 		} catch {
 			return '0';
@@ -94,6 +97,7 @@
 				organizationId: workspace.activeOrganizationId,
 				batchId: editingBatchId ? (editingBatchId as Id<'paymentBatches'>) : undefined,
 				type: 'batch',
+				asset,
 				name,
 				sourceWalletId: sourceWalletId as Id<'wallets'>,
 				idempotencyKey: runKey,
@@ -122,6 +126,7 @@
 	function editRun(run: {
 		batch: {
 			_id: string;
+			asset: 'ETH' | 'USDC';
 			name: string;
 			sourceWalletId: string;
 			requestKey?: string;
@@ -137,6 +142,7 @@
 	}) {
 		editingBatchId = run.batch._id;
 		name = run.batch.name;
+		asset = run.batch.asset;
 		sourceWalletId = run.batch.sourceWalletId;
 		runKey = run.batch.requestKey ?? crypto.randomUUID();
 		scheduledAt = run.batch.scheduledFor ? toLocalDateTime(run.batch.scheduledFor) : '';
@@ -246,7 +252,7 @@
 <PageHeader
 	eyebrow="BULK MONEY MOVEMENT"
 	title="Payouts"
-	description="Send independently traceable Base Sepolia USDC payouts to organization counterparties."
+	description="Send independently traceable Base Sepolia ETH or USDC payouts to approved counterparties."
 />
 
 {#if error}<p class="form-error notice" role="alert">{error}</p>{/if}
@@ -267,6 +273,11 @@
 		}}
 	>
 		<div class="fields">
+			<label
+				>Asset<select bind:value={asset} disabled={Boolean(editingBatchId)}
+					><option value="ETH">ETH</option><option value="USDC">USDC</option></select
+				></label
+			>
 			<label
 				>Run name<input
 					bind:value={name}
@@ -331,7 +342,7 @@
 							inputmode="decimal"
 							placeholder="0.00"
 							required
-						/><span>USDC</span>
+						/><span>{asset}</span>
 					</div>
 					<input
 						aria-label={`Payout memo ${index + 1}`}
@@ -360,7 +371,7 @@
 				</p>
 			</div>
 			<div class="total">
-				<span>{items.length} payout(s)</span><strong>{total} USDC</strong><button
+				<span>{items.length} payout(s)</span><strong>{total} {asset}</strong><button
 					class="button primary"
 					disabled={submitting || total === '0' || items.some((item) => !item.recipientId)}
 					>{submitting ? 'Saving…' : 'Save draft'} <Save size={14} /></button

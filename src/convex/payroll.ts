@@ -3,7 +3,7 @@ import { mutation, query, internalMutation, internalQuery } from './_generated/s
 import { internal } from './_generated/api';
 import { assertOrgScoped, requireMembership } from './lib/authz';
 import { appendAudit } from './lib/audit';
-import { getAddress, verifyMessage } from 'viem';
+import { getAddress } from 'viem';
 import type { GenericMutationCtx } from 'convex/server';
 import type { DataModel, Id } from './_generated/dataModel';
 
@@ -181,25 +181,60 @@ export const createExternalChallenge = mutation({
 	}
 });
 
-export const verifyExternalDestination = mutation({
+export const getExternalVerificationContext = internalQuery({
 	args: {
 		organizationId: v.id('organizations'),
 		challengeId: v.id('walletVerificationChallenges'),
-		signature: v.string()
+		privyDid: v.string()
 	},
-	returns: v.null(),
+	returns: v.object({ address: v.string(), message: v.string() }),
 	handler: async (ctx, args) => {
-		const { user } = await requireMembership(ctx, args.organizationId);
+		const user = await ctx.db
+			.query('users')
+			.withIndex('by_privy_did', (q) => q.eq('privyDid', args.privyDid))
+			.unique();
+		if (!user) throw new Error('Organization access denied.');
+		const membership = await ctx.db
+			.query('memberships')
+			.withIndex('by_org_user', (q) =>
+				q.eq('organizationId', args.organizationId).eq('userId', user._id)
+			)
+			.unique();
+		if (!membership || membership.status !== 'active')
+			throw new Error('Organization access denied.');
 		const challenge = await ctx.db.get(args.challengeId);
 		assertOrgScoped(challenge, args.organizationId);
 		if (challenge.userId !== user._id || challenge.usedAt || challenge.expiresAt <= Date.now())
 			throw new Error('Wallet verification challenge is invalid or expired.');
-		const valid = await verifyMessage({
-			address: getAddress(challenge.address),
-			message: challenge.message,
-			signature: args.signature as `0x${string}`
-		});
-		if (!valid) throw new Error('Wallet ownership signature is invalid.');
+		return { address: challenge.address, message: challenge.message };
+	}
+});
+
+export const commitExternalDestination = internalMutation({
+	args: {
+		organizationId: v.id('organizations'),
+		challengeId: v.id('walletVerificationChallenges'),
+		privyDid: v.string()
+	},
+	returns: v.null(),
+	handler: async (ctx, args) => {
+		const user = await ctx.db
+			.query('users')
+			.withIndex('by_privy_did', (q) => q.eq('privyDid', args.privyDid))
+			.unique();
+		if (!user) throw new Error('Organization access denied.');
+		const membership = await ctx.db
+			.query('memberships')
+			.withIndex('by_org_user', (q) =>
+				q.eq('organizationId', args.organizationId).eq('userId', user._id)
+			)
+			.unique();
+		if (!membership || membership.status !== 'active')
+			throw new Error('Organization access denied.');
+		const challenge = await ctx.db.get(args.challengeId);
+		assertOrgScoped(challenge, args.organizationId);
+		if (challenge.userId !== user._id || challenge.usedAt || challenge.expiresAt <= Date.now())
+			throw new Error('Wallet verification challenge is invalid or expired.');
 		await ctx.db.patch(challenge._id, { usedAt: Date.now() });
 		const profile = await ctx.db
 			.query('payrollProfiles')

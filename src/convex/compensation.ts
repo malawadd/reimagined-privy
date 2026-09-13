@@ -1,7 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server';
 import { assertOrgScoped, requireMembership } from './lib/authz';
-import { normalizeDecimal } from '../lib/domain';
+import { assetDecimals, normalizeDecimal } from '../lib/domain';
 import { appendAudit } from './lib/audit';
 
 const frequency = v.union(
@@ -53,11 +53,14 @@ export const set = mutation({
 			throw new Error('Compensation member is not active.');
 		const memberUser = await ctx.db.get(args.userId);
 		if (!memberUser) throw new Error('Compensation member was not found.');
-		const baseAmount = normalizeDecimal(args.baseAmount, 6);
-		if (baseAmount === '0') throw new Error('Base compensation must be greater than zero.');
 		const currency = args.denominationCurrency.trim().toUpperCase();
-		if (currency !== 'USD')
-			throw new Error('Base Sepolia payroll currently supports USD-denominated compensation.');
+		if (currency !== 'USD' && currency !== 'ETH')
+			throw new Error('Base Sepolia payroll supports USD or ETH-denominated compensation.');
+		const baseAmount = normalizeDecimal(
+			args.baseAmount,
+			currency === 'ETH' ? assetDecimals('ETH') : assetDecimals('USDC')
+		);
+		if (baseAmount === '0') throw new Error('Base compensation must be greater than zero.');
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(args.effectiveFrom))
 			throw new Error('Effective date must use YYYY-MM-DD.');
 		const employeeCode = optionalText(args.employeeCode, 40, 'Employee code');

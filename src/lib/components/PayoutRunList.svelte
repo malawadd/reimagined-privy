@@ -21,6 +21,7 @@
 	type Run = {
 		batch: {
 			_id: string;
+			asset: 'ETH' | 'USDC';
 			name: string;
 			totalAmount: string;
 			itemCount: number;
@@ -92,7 +93,7 @@
 						<strong>{row.batch.name}</strong>
 						<small>{new Date(row.batch.createdAt).toLocaleString()}</small>
 					</div>
-					<div><span>TOTAL</span><strong>{row.batch.totalAmount} USDC</strong></div>
+					<div><span>TOTAL</span><strong>{row.batch.totalAmount} {row.batch.asset}</strong></div>
 					<div><span>ITEMS</span><strong>{row.batch.itemCount}</strong></div>
 					<StatusBadge status={row.batch.status} />
 					<div class="run-actions">
@@ -142,7 +143,7 @@
 									<strong>{item.label}</strong>
 									<code>{item.destination}</code>
 								</div>
-								<div><span>AMOUNT</span><strong>{item.amount} USDC</strong></div>
+								<div><span>AMOUNT</span><strong>{item.amount} {row.batch.asset}</strong></div>
 								<div>
 									<span>ROUTE</span><small
 										>{item.attempt?.providerKind === 'privyAction'

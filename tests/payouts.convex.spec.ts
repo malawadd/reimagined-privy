@@ -169,6 +169,73 @@ async function createDispatchedPayroll(
 }
 
 describe('payout runs', () => {
+	it('preserves ETH compensation snapshots and routes the exact payout through a Privy intent', async () => {
+		const fixture = await setupPayroll();
+		await fixture.owner.mutation(api.compensation.set, {
+			organizationId: fixture.organizationId,
+			userId: fixture.memberId,
+			employeeCode: 'EMP-001',
+			department: 'Product & Operations',
+			baseAmount: '0.0005',
+			denominationCurrency: 'ETH',
+			payFrequency: 'monthly',
+			effectiveFrom: '2026-09-01'
+		});
+		const draft = await fixture.owner.mutation(api.payouts.saveDraft, {
+			organizationId: fixture.organizationId,
+			type: 'payroll',
+			asset: 'ETH',
+			name: 'ETH demo payroll',
+			sourceWalletId: fixture.walletId,
+			idempotencyKey: 'eth_demo_payroll_2026_09',
+			payPeriodStart: '2026-09-01',
+			payPeriodEnd: '2026-09-30',
+			payDate: '2026-09-30',
+			denominationCurrency: 'ETH',
+			items: [
+				{
+					userId: fixture.memberId,
+					deductions: [{ label: 'Deduction', amount: '0.0001' }]
+				}
+			]
+		});
+		await fixture.owner.mutation(api.payouts.finalize, {
+			organizationId: fixture.organizationId,
+			batchId: draft.batchId
+		});
+		await fixture.owner.mutation(api.payouts.submitForApproval, {
+			organizationId: fixture.organizationId,
+			batchId: draft.batchId
+		});
+		await fixture.approver.mutation(api.payouts.approve, {
+			organizationId: fixture.organizationId,
+			batchId: draft.batchId
+		});
+		await fixture.owner.mutation(api.payouts.dispatch, {
+			organizationId: fixture.organizationId,
+			batchId: draft.batchId
+		});
+		const stored = await fixture.t.run(async (ctx) => ({
+			batch: await ctx.db.get(draft.batchId),
+			item: await ctx.db.query('paymentBatchItems').unique(),
+			operation: await ctx.db.query('operations').unique(),
+			attempt: await ctx.db.query('providerAttempts').unique(),
+			cases: await ctx.db.query('reconciliationCases').collect()
+		}));
+		expect(stored.batch).toMatchObject({ asset: 'ETH', totalAmount: '0.0004' });
+		expect(stored.item?.payslipSnapshot).toMatchObject({
+			grossAmount: '0.0005',
+			deductionAmount: '0.0001',
+			netAmount: '0.0004',
+			denominationCurrency: 'ETH'
+		});
+		expect(stored.operation).toMatchObject({ asset: 'ETH', approvalPath: 'privyIntent' });
+		expect(stored.attempt).toMatchObject({ providerKind: 'privyIntent', status: 'pending' });
+		expect(stored.cases).toContainEqual(
+			expect.objectContaining({ kind: 'missingValuation', sourceType: 'payroll' })
+		);
+	});
+
 	it('moves an immutable payroll draft through maker-checker release before provider dispatch', async () => {
 		const fixture = await setupPayroll();
 		const draft = await fixture.owner.mutation(api.payouts.saveDraft, {

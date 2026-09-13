@@ -1,10 +1,12 @@
 import {
 	BASE_SEPOLIA,
+	assetDecimals,
 	decimalToUnits,
 	normalizeDecimal,
 	normalizeEvmAddress,
 	unitsToDecimal
 } from './domain';
+import type { Asset } from './domain';
 
 export type PayoutRunKind = 'batch' | 'payroll';
 export type PayoutItemStatus =
@@ -53,14 +55,15 @@ export function payoutAttemptKey(operationId: string, attempt = 1) {
 	return `operation:${operationId}:submit:${attempt}`;
 }
 
-export function totalPayoutAmount(values: readonly string[]) {
+export function totalPayoutAmount(values: readonly string[], asset: Asset = 'USDC') {
+	const decimals = assetDecimals(asset);
 	let units = 0n;
 	for (const value of values) {
-		const amount = normalizeDecimal(value, 6);
+		const amount = normalizeDecimal(value, decimals);
 		if (amount === '0') throw new Error('Payout amounts must be greater than zero.');
-		units += decimalToUnits(amount, 6);
+		units += decimalToUnits(amount, decimals);
 	}
-	return unitsToDecimal(units.toString(), 6);
+	return unitsToDecimal(units.toString(), decimals);
 }
 
 export function assertUniquePayrollMembers(userIds: readonly string[]) {
@@ -95,7 +98,10 @@ export function activeAutomationPolicyAllows(input: {
 	walletPolicyIds: readonly string[];
 	amount: string;
 	destination: string;
+	asset?: Asset;
 }) {
+	const asset = input.asset ?? 'USDC';
+	if (asset !== 'USDC') return false;
 	const destination = normalizeEvmAddress(input.destination);
 	const amount = decimalToUnits(input.amount, 6);
 	for (const policy of input.policies) {
@@ -148,6 +154,43 @@ export function activeAutomationPolicyAllows(input: {
 	return false;
 }
 
+export function activeSweepPolicyAllows(input: {
+	policies: ReadonlyArray<{ kind: string; status: string; json: unknown; privyPolicyId: string }>;
+	walletPolicyIds: readonly string[];
+	asset: Asset;
+	destination: string;
+}) {
+	const destination = normalizeEvmAddress(input.destination);
+	for (const policy of input.policies) {
+		if (
+			policy.kind !== 'sweep' ||
+			policy.status !== 'active' ||
+			!input.walletPolicyIds.includes(policy.privyPolicyId)
+		)
+			continue;
+		const document = asRecord(policy.json);
+		const rules = Array.isArray(document?.rules) ? document.rules : [];
+		for (const candidate of rules) {
+			const rule = asRecord(candidate);
+			if (rule?.method !== 'transfer' || rule.action !== 'ALLOW') continue;
+			const conditions = Array.isArray(rule.conditions) ? rule.conditions.map(asRecord) : [];
+			if (
+				hasStringCondition(conditions, 'source.asset', 'eq', input.asset.toLowerCase()) &&
+				hasStringCondition(conditions, 'source.chain', 'eq', BASE_SEPOLIA.transferChain) &&
+				conditions.some(
+					(condition) =>
+						condition?.field === 'destination.address' &&
+						condition.operator === 'eq' &&
+						typeof condition.value === 'string' &&
+						addressesEqual(condition.value, destination)
+				)
+			)
+				return true;
+		}
+	}
+	return false;
+}
+
 export function assertAutomationExecutionBinding(input: {
 	organizationActive: boolean;
 	organizationId: string;
@@ -186,7 +229,8 @@ export function assertAutomationExecutionBinding(input: {
 			policies: input.policies,
 			walletPolicyIds: input.walletPolicyIds,
 			amount: input.amount,
-			destination: input.destination
+			destination: input.destination,
+			asset: input.asset as Asset
 		})
 	)
 		throw new Error('automation_policy_binding_invalid');

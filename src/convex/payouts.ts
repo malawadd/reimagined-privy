@@ -12,7 +12,8 @@ import {
 	payoutItemRequestKey,
 	totalPayoutAmount
 } from '../lib/payout-domain';
-import { decimalToUnits, normalizeDecimal, unitsToDecimal } from '../lib/domain';
+import { assetDecimals, decimalToUnits, normalizeDecimal, unitsToDecimal } from '../lib/domain';
+import type { Asset } from '../lib/domain';
 import { resolvePayrollDestination } from '../lib/wallet-controls';
 import { appendAudit } from './lib/audit';
 import { postSourceJournal } from './lib/accounting';
@@ -81,6 +82,7 @@ export const saveDraft = mutation({
 		type: v.union(v.literal('batch'), v.literal('payroll')),
 		name: v.string(),
 		sourceWalletId: v.id('wallets'),
+		asset: v.optional(v.union(v.literal('ETH'), v.literal('USDC'))),
 		idempotencyKey: v.string(),
 		scheduledFor: v.optional(v.number()),
 		payPeriodStart: v.optional(v.string()),
@@ -110,7 +112,8 @@ export const saveDraft = mutation({
 		if (args.items.length < 1 || args.items.length > 100)
 			throw new Error('A payout run must contain 1 to 100 payments.');
 		const suppliedRequestKey = normalizePayoutRunKey(args.idempotencyKey);
-		if (args.type === 'payroll') validatePayPeriod(args);
+		const asset = args.asset ?? 'USDC';
+		if (args.type === 'payroll') validatePayPeriod({ ...args, asset });
 
 		let existing: Doc<'paymentBatches'> | null;
 		if (args.batchId) {
@@ -118,6 +121,7 @@ export const saveDraft = mutation({
 			assertOrgScoped(existing, args.organizationId);
 			if (existing.status !== 'draft') throw new Error('Only a draft payout run can be edited.');
 			if (existing.type !== args.type) throw new Error('Payout run type cannot be changed.');
+			if (existing.asset !== asset) throw new Error('Payout run asset cannot be changed.');
 			if (existing.requestKey && existing.requestKey !== suppliedRequestKey)
 				throw new Error('A payout draft idempotency key cannot be changed.');
 		} else {
@@ -142,10 +146,14 @@ export const saveDraft = mutation({
 			type: args.type,
 			requestKey,
 			revision,
+			asset,
 			denominationCurrency: args.denominationCurrency,
 			items: args.items
 		});
-		const totalAmount = totalPayoutAmount(prepared.map((item) => item.amount));
+		const totalAmount = totalPayoutAmount(
+			prepared.map((item) => item.amount),
+			asset
+		);
 		const now = Date.now();
 		const batchPatch = {
 			name,
@@ -178,7 +186,7 @@ export const saveDraft = mutation({
 			batchId = await ctx.db.insert('paymentBatches', {
 				organizationId: args.organizationId,
 				type: args.type,
-				asset: 'USDC',
+				asset,
 				createdBy: user._id,
 				createdAt: now,
 				...batchPatch
@@ -218,10 +226,10 @@ export const finalize = mutation({
 		if (!items.length || items.length > 100) throw new Error('Draft item count is invalid.');
 		const wallet = await ctx.db.get(batch.sourceWalletId);
 		assertOrgScoped(wallet, args.organizationId);
-		const [usdcBalance, ethBalance, policies] = await Promise.all([
+		const [assetBalance, ethBalance, policies] = await Promise.all([
 			ctx.db
 				.query('walletBalances')
-				.withIndex('by_wallet_asset', (q) => q.eq('walletId', wallet._id).eq('asset', 'USDC'))
+				.withIndex('by_wallet_asset', (q) => q.eq('walletId', wallet._id).eq('asset', batch.asset))
 				.unique(),
 			ctx.db
 				.query('walletBalances')
@@ -232,13 +240,19 @@ export const finalize = mutation({
 				.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
 				.take(100)
 		]);
-		if (!usdcBalance || !ethBalance)
+		if (!assetBalance || !ethBalance)
 			throw new Error('Refresh treasury balances before finalizing this payout run.');
-		if (decimalToUnits(usdcBalance.displayValue, 6) < decimalToUnits(batch.totalAmount, 6))
-			throw new Error('Treasury USDC balance is below the payout run total.');
-		if (decimalToUnits(ethBalance.displayValue, 18) === 0n)
+		const decimals = assetDecimals(batch.asset);
+		const available = decimalToUnits(assetBalance.displayValue, decimals);
+		const required = decimalToUnits(batch.totalAmount, decimals);
+		if (available < required || (batch.asset === 'ETH' && available === required))
+			throw new Error(
+				`Treasury ${batch.asset} balance must cover the payout run and network fees.`
+			);
+		if (batch.asset === 'USDC' && decimalToUnits(ethBalance.displayValue, 18) === 0n)
 			throw new Error('Treasury ETH balance is empty; add Base Sepolia gas before finalizing.');
-		const runAllowsAutomation = decimalToUnits(batch.totalAmount, 6) <= decimalToUnits('100', 6);
+		const runAllowsAutomation =
+			batch.asset === 'USDC' && decimalToUnits(batch.totalAmount, 6) <= decimalToUnits('100', 6);
 		for (const item of items) {
 			await verifyFrozenDestination(ctx, batch, item);
 			const automationAllowed =
@@ -247,7 +261,8 @@ export const finalize = mutation({
 					policies,
 					walletPolicyIds: wallet.policyIds,
 					amount: item.amount,
-					destination: item.destination
+					destination: item.destination,
+					asset: batch.asset
 				});
 			await ctx.db.patch(item._id, {
 				routeReason: automationAllowed
@@ -317,7 +332,7 @@ export const approve = mutation({
 				sourceKey: `payroll:${batch._id}:approved`,
 				sourceType: 'payroll',
 				amount: batch.totalAmount,
-				asset: 'USDC',
+				asset: batch.asset,
 				postingDate: now,
 				description: `${batch.name} payroll approved`,
 				isPayrollAccrual: true
@@ -420,12 +435,14 @@ export const retryItem = mutation({
 			.withIndex('by_org', (q) => q.eq('organizationId', args.organizationId))
 			.take(100);
 		const path =
+			batch.asset === 'USDC' &&
 			decimalToUnits(batch.totalAmount, 6) <= decimalToUnits('100', 6) &&
 			activeAutomationPolicyAllows({
 				policies,
 				walletPolicyIds: wallet.policyIds,
 				amount: item.amount,
-				destination: item.destination
+				destination: item.destination,
+				asset: batch.asset
 			})
 				? ('automationSigner' as const)
 				: ('privyIntent' as const);
@@ -512,6 +529,7 @@ async function prepareDraftItems(
 		type: 'batch' | 'payroll';
 		requestKey: string;
 		revision: number;
+		asset: Asset;
 		denominationCurrency?: string;
 		items: Array<{
 			label?: string;
@@ -538,9 +556,9 @@ async function prepareDraftItems(
 			if (!input.recipientId) throw new Error('Every payout requires an approved counterparty.');
 			const recipient = await ctx.db.get(input.recipientId);
 			assertOrgScoped(recipient, args.organizationId);
-			if (recipient.status !== 'approved' || !recipient.assets.includes('USDC'))
-				throw new Error(`Recipient ${recipient.label} is not approved for USDC.`);
-			const amount = requiredAmount(input.amount);
+			if (recipient.status !== 'approved' || !recipient.assets.includes(args.asset))
+				throw new Error(`Recipient ${recipient.label} is not approved for ${args.asset}.`);
+			const amount = requiredAmount(input.amount, args.asset);
 			prepared.push({
 				label: input.label?.trim() || recipient.label,
 				recipientId: recipient._id,
@@ -558,7 +576,8 @@ async function prepareDraftItems(
 		prepared.push(
 			await preparePayrollItem(ctx, args.organizationId, input.userId, input, {
 				requestKey: payoutItemRequestKey('payroll', args.requestKey, args.revision, index),
-				denominationCurrency: args.denominationCurrency ?? 'USD'
+				denominationCurrency: args.denominationCurrency ?? (args.asset === 'ETH' ? 'ETH' : 'USD'),
+				asset: args.asset
 			})
 		);
 	}
@@ -576,7 +595,7 @@ async function preparePayrollItem(
 		earnings?: Array<{ label: string; amount: string }>;
 		deductions?: Array<{ label: string; amount: string }>;
 	},
-	meta: { requestKey: string; denominationCurrency: string }
+	meta: { requestKey: string; denominationCurrency: string; asset: Asset }
 ) {
 	const membership = await ctx.db
 		.query('memberships')
@@ -616,8 +635,11 @@ async function preparePayrollItem(
 	if (!destinationVerifiedAt || !profile.destinationKind)
 		throw new Error('Member salary destination is not verified.');
 	const currency = meta.denominationCurrency.trim().toUpperCase();
-	if (currency !== 'USD')
-		throw new Error('Base Sepolia payroll currently requires USD denomination.');
+	const expectedCurrency = meta.asset === 'ETH' ? 'ETH' : 'USD';
+	if (currency !== expectedCurrency)
+		throw new Error(
+			`Base Sepolia ${meta.asset} payroll requires ${expectedCurrency} denomination.`
+		);
 	if (compensation && compensation.denominationCurrency.toUpperCase() !== currency)
 		throw new Error('Compensation currency does not match the payroll run.');
 	const earnings = normalizeComponents(
@@ -628,13 +650,18 @@ async function preparePayrollItem(
 						label: compensation ? 'Base pay' : 'Pay',
 						amount: input.amount ?? compensation?.baseAmount ?? ''
 					}
-				]
+				],
+		meta.asset
 	);
-	const deductions = normalizeComponents(input.deductions ?? []);
-	const grossUnits = earnings.reduce((sum, row) => sum + decimalToUnits(row.amount, 6), 0n);
-	const deductionUnits = deductions.reduce((sum, row) => sum + decimalToUnits(row.amount, 6), 0n);
+	const deductions = normalizeComponents(input.deductions ?? [], meta.asset);
+	const decimals = assetDecimals(meta.asset);
+	const grossUnits = earnings.reduce((sum, row) => sum + decimalToUnits(row.amount, decimals), 0n);
+	const deductionUnits = deductions.reduce(
+		(sum, row) => sum + decimalToUnits(row.amount, decimals),
+		0n
+	);
 	if (deductionUnits > grossUnits) throw new Error('Payroll deductions cannot exceed earnings.');
-	const amount = unitsToDecimal((grossUnits - deductionUnits).toString(), 6);
+	const amount = unitsToDecimal((grossUnits - deductionUnits).toString(), decimals);
 	if (amount === '0') throw new Error('Payroll net amount must be greater than zero.');
 	return {
 		label: memberUser?.name ?? memberUser?.email ?? 'Member',
@@ -654,8 +681,8 @@ async function preparePayrollItem(
 			denominationCurrency: currency,
 			earnings,
 			deductions,
-			grossAmount: unitsToDecimal(grossUnits.toString(), 6),
-			deductionAmount: unitsToDecimal(deductionUnits.toString(), 6),
+			grossAmount: unitsToDecimal(grossUnits.toString(), decimals),
+			deductionAmount: unitsToDecimal(deductionUnits.toString(), decimals),
 			netAmount: amount,
 			compensationProfileVersion: compensation?.version
 		},
@@ -675,6 +702,7 @@ async function verifyFrozenDestination(
 		const version = recipient.approvedAt ?? recipient._creationTime;
 		if (
 			recipient.status !== 'approved' ||
+			!recipient.assets.includes(batch.asset) ||
 			recipient.address !== item.destination ||
 			version !== item.destinationVersion
 		)
@@ -722,7 +750,8 @@ async function dispatchRun(ctx: GenericMutationCtx<DataModel>, batch: Doc<'payme
 		.query('policies')
 		.withIndex('by_org', (q) => q.eq('organizationId', batch.organizationId))
 		.take(100);
-	const runAllowsAutomation = decimalToUnits(batch.totalAmount, 6) <= decimalToUnits('100', 6);
+	const runAllowsAutomation =
+		batch.asset === 'USDC' && decimalToUnits(batch.totalAmount, 6) <= decimalToUnits('100', 6);
 	await ctx.db.patch(batch._id, {
 		status: 'dispatching',
 		dispatchedAt: Date.now(),
@@ -736,7 +765,8 @@ async function dispatchRun(ctx: GenericMutationCtx<DataModel>, batch: Doc<'payme
 				policies,
 				walletPolicyIds: wallet.policyIds,
 				amount: item.amount,
-				destination: item.destination
+				destination: item.destination,
+				asset: batch.asset
 			})
 				? ('automationSigner' as const)
 				: ('privyIntent' as const);
@@ -787,7 +817,7 @@ async function createPayoutOperation(
 		kind: 'payment',
 		status: 'queued',
 		approvalPath: path,
-		asset: 'USDC',
+		asset: batch.asset,
 		amount: item.amount,
 		destination: item.destination,
 		memo: item.memo,
@@ -861,18 +891,18 @@ async function auditRun(
 	});
 }
 
-function normalizeComponents(rows: Array<{ label: string; amount: string }>) {
+function normalizeComponents(rows: Array<{ label: string; amount: string }>, asset: Asset) {
 	return rows.map((row) => {
 		const label = row.label.trim();
 		if (!label || label.length > 80)
 			throw new Error('Payslip component labels must be 1 to 80 characters.');
-		return { label, amount: requiredAmount(row.amount) };
+		return { label, amount: requiredAmount(row.amount, asset) };
 	});
 }
 
-function requiredAmount(value: string | undefined) {
+function requiredAmount(value: string | undefined, asset: Asset) {
 	if (!value) throw new Error('Payout amount is required.');
-	const amount = normalizeDecimal(value, 6);
+	const amount = normalizeDecimal(value, assetDecimals(asset));
 	if (amount === '0') throw new Error('Payout amounts must be greater than zero.');
 	return amount;
 }
@@ -888,6 +918,7 @@ function validatePayPeriod(args: {
 	payPeriodEnd?: string;
 	payDate?: string;
 	denominationCurrency?: string;
+	asset: Asset;
 }) {
 	for (const [label, value] of [
 		['pay period start', args.payPeriodStart],
@@ -898,6 +929,9 @@ function validatePayPeriod(args: {
 			throw new Error(`Payroll ${label} must use YYYY-MM-DD.`);
 	if (args.payPeriodStart! > args.payPeriodEnd!)
 		throw new Error('Pay period start must not follow its end.');
-	if ((args.denominationCurrency ?? '').trim().toUpperCase() !== 'USD')
-		throw new Error('Base Sepolia payroll currently requires USD denomination.');
+	const expectedCurrency = args.asset === 'ETH' ? 'ETH' : 'USD';
+	if ((args.denominationCurrency ?? '').trim().toUpperCase() !== expectedCurrency)
+		throw new Error(
+			`Base Sepolia ${args.asset} payroll requires ${expectedCurrency} denomination.`
+		);
 }

@@ -5,7 +5,7 @@
 	import type { Id } from '../../../convex/_generated/dataModel';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import PayoutRunList from '$lib/components/PayoutRunList.svelte';
-	import { decimalToUnits, unitsToDecimal } from '$lib/domain';
+	import { assetDecimals, decimalToUnits, unitsToDecimal } from '$lib/domain';
 	import { parseCsvRecords } from '$lib/payout-csv';
 	import { workspace } from '$lib/workspace.svelte';
 
@@ -33,6 +33,7 @@
 	const reconcilePayout = useMutation(api.payouts.reconcileItem);
 
 	let name = $state('');
+	let asset = $state<'ETH' | 'USDC'>('ETH');
 	let sourceWalletId = $state('');
 	type PayrollItem = {
 		userId: string;
@@ -79,12 +80,12 @@
 					.reduce(
 						(sum, item) =>
 							sum +
-							decimalToUnits(item.amount || '0', 6) -
-							decimalToUnits(item.deduction || '0', 6),
+							decimalToUnits(item.amount || '0', assetDecimals(asset)) -
+							decimalToUnits(item.deduction || '0', assetDecimals(asset)),
 						0n
 					)
 					.toString(),
-				6
+				assetDecimals(asset)
 			);
 		} catch {
 			return '0';
@@ -121,6 +122,7 @@
 				organizationId: workspace.activeOrganizationId,
 				batchId: editingBatchId ? (editingBatchId as Id<'paymentBatches'>) : undefined,
 				type: 'payroll',
+				asset,
 				name,
 				sourceWalletId: sourceWalletId as Id<'wallets'>,
 				idempotencyKey: runKey,
@@ -129,7 +131,7 @@
 				payDate,
 				payrollKind,
 				scheduledFor: scheduledAt ? new Date(scheduledAt).getTime() : undefined,
-				denominationCurrency: 'USD',
+				denominationCurrency: asset === 'ETH' ? 'ETH' : 'USD',
 				items: items.map((item) => ({
 					userId: item.userId as Id<'users'>,
 					earnings: [{ label: 'Gross pay', amount: item.amount }],
@@ -157,6 +159,7 @@
 	function editRun(run: {
 		batch: {
 			_id: string;
+			asset: 'ETH' | 'USDC';
 			name: string;
 			sourceWalletId: string;
 			requestKey?: string;
@@ -176,6 +179,7 @@
 	}) {
 		editingBatchId = run.batch._id;
 		name = run.batch.name;
+		asset = run.batch.asset;
 		sourceWalletId = run.batch.sourceWalletId;
 		runKey = run.batch.requestKey ?? crypto.randomUUID();
 		payPeriodStart = run.batch.payPeriodStart ?? payPeriodStart;
@@ -268,7 +272,7 @@
 				employeeCode: employeeCode || undefined,
 				department: department || undefined,
 				baseAmount,
-				denominationCurrency: 'USD',
+				denominationCurrency: asset === 'ETH' ? 'ETH' : 'USD',
 				payFrequency,
 				effectiveFrom: payPeriodStart
 			});
@@ -312,7 +316,7 @@
 <PageHeader
 	eyebrow="MEMBER PAYOUTS"
 	title="Payroll"
-	description="Pay verified member destinations in Base Sepolia USDC with immutable snapshots and Privy-enforced authority."
+	description="Pay verified member destinations in Base Sepolia ETH or USDC with immutable snapshots and Privy-enforced authority."
 />
 
 {#if error}<p class="form-error notice" role="alert">{error}</p>{/if}
@@ -334,6 +338,11 @@
 			<Users size={19} />
 		</header>
 		<div class="fields">
+			<label
+				>Asset<select bind:value={asset} disabled={Boolean(editingBatchId)}
+					><option value="ETH">ETH</option><option value="USDC">USDC</option></select
+				></label
+			>
 			<label
 				>Run name<input
 					bind:value={name}
@@ -400,7 +409,7 @@
 							inputmode="decimal"
 							placeholder="Gross pay"
 							required
-						/><span>USDC</span>
+						/><span>{asset}</span>
 					</div>
 					<div class="amount">
 						<input
@@ -409,7 +418,7 @@
 							oninput={(event) => updateItem(index, 'deduction', event.currentTarget.value)}
 							inputmode="decimal"
 							placeholder="Deductions"
-						/><span>USDC</span>
+						/><span>{asset}</span>
 					</div>
 					<input
 						aria-label={`Payroll memo ${index + 1}`}
@@ -429,12 +438,12 @@
 				</div>
 			{/each}
 		</div>
-		<div class="total"><span>{items.length} payment(s)</span><strong>{total} USDC</strong></div>
+		<div class="total"><span>{items.length} payment(s)</span><strong>{total} {asset}</strong></div>
 		<div class="authority">
 			<ShieldCheck size={17} />
 			<p>
-				Ratib uses the active policy attached to this treasury. Any unmatched destination or
-				aggregate run above 100 USDC is routed to a Privy intent.
+				Ratib uses the active policy attached to this treasury. ETH uses an exact Privy intent; USDC
+				automation is available only when the attached policy allows the complete run.
 			</p>
 		</div>
 		<button
@@ -461,7 +470,7 @@
 			</div>
 			<div>
 				<dt>Settlement asset</dt>
-				<dd>USDC</dd>
+				<dd>{asset}</dd>
 			</div>
 			<div>
 				<dt>Uncertain writes</dt>

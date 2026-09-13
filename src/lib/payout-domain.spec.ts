@@ -36,6 +36,7 @@ describe('payout domain', () => {
 
 	it('totals USDC exactly and rejects duplicate payroll members', () => {
 		expect(totalPayoutAmount(['0.100001', '2.9', '7'])).toBe('10.000001');
+		expect(totalPayoutAmount(['0.0004', '0.0008'], 'ETH')).toBe('0.0012');
 		expect(() => totalPayoutAmount(['0'])).toThrow('greater than zero');
 		expect(() => assertUniquePayrollMembers(['user_a', 'user_a'])).toThrow('member twice');
 	});
@@ -54,6 +55,15 @@ describe('payout domain', () => {
 				policies: [policy],
 				walletPolicyIds: ['policy_automation'],
 				amount: '100.000001',
+				destination
+			})
+		).toBe(false);
+		expect(
+			activeAutomationPolicyAllows({
+				policies: [policy],
+				walletPolicyIds: ['policy_automation'],
+				asset: 'ETH',
+				amount: '0.0004',
 				destination
 			})
 		).toBe(false);
